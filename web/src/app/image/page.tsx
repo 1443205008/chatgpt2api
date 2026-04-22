@@ -7,7 +7,7 @@ import { ImageComposer } from "@/app/image/components/image-composer";
 import { ImageResults, type ImageLightboxItem } from "@/app/image/components/image-results";
 import { ImageSidebar } from "@/app/image/components/image-sidebar";
 import { ImageLightbox } from "@/components/image-lightbox";
-import { editImage, fetchAccounts, generateImage, type Account, type ImageModel } from "@/lib/api";
+import { editImage, fetchAccounts, generateImage, type Account } from "@/lib/api";
 import {
   clearImageConversations,
   deleteImageConversation,
@@ -24,11 +24,6 @@ import {
 
 const ACTIVE_CONVERSATION_STORAGE_KEY = "chatgpt2api:image_active_conversation_id";
 const activeConversationQueueIds = new Set<string>();
-
-const imageModelOptions: Array<{ label: string; value: ImageModel }> = [
-  { label: "gpt-image-1", value: "gpt-image-1" },
-  { label: "gpt-image-2", value: "gpt-image-2" },
-];
 
 function buildConversationTitle(prompt: string) {
   const trimmed = prompt.trim();
@@ -176,7 +171,6 @@ export default function ImagePage() {
   const [imagePrompt, setImagePrompt] = useState("");
   const [imageCount, setImageCount] = useState("1");
   const [imageMode, setImageMode] = useState<ImageConversationMode>("generate");
-  const [imageModel, setImageModel] = useState<ImageModel>("gpt-image-1");
   const [referenceImageFiles, setReferenceImageFiles] = useState<File[]>([]);
   const [referenceImages, setReferenceImages] = useState<StoredReferenceImage[]>([]);
   const [conversations, setConversations] = useState<ImageConversation[]>([]);
@@ -191,10 +185,6 @@ export default function ImagePage() {
   const selectedConversation = useMemo(
     () => conversations.find((item) => item.id === selectedConversationId) ?? null,
     [conversations, selectedConversationId],
-  );
-  const selectedConversationStats = useMemo(
-    () => getImageConversationStats(selectedConversation),
-    [selectedConversation],
   );
   const activeTaskCount = useMemo(
     () =>
@@ -435,24 +425,25 @@ export default function ImagePage() {
   }, []);
 
   const handleContinueEdit = useCallback(
-    (conversationId: string, image: StoredImage) => {
-      const nextReferenceImage = buildReferenceImageFromResult(
-        image,
-        `conversation-${conversationId}-${Date.now()}.png`,
-      );
+    (conversationId: string, image: StoredImage | StoredReferenceImage) => {
+      const nextReferenceImage =
+        "dataUrl" in image
+          ? image
+          : buildReferenceImageFromResult(image, `conversation-${conversationId}-${Date.now()}.png`);
       if (!nextReferenceImage) {
         return;
       }
 
       setSelectedConversationId(conversationId);
       setImageMode("edit");
-      setReferenceImages([nextReferenceImage]);
-      setReferenceImageFiles([
+      setReferenceImages((prev) => [...prev, nextReferenceImage]);
+      setReferenceImageFiles((prev) => [
+        ...prev,
         dataUrlToFile(nextReferenceImage.dataUrl, nextReferenceImage.name, nextReferenceImage.type),
       ]);
       setImagePrompt("");
       textareaRef.current?.focus();
-      toast.success("已把这张结果图设为当前参考图");
+      toast.success("已加入当前参考图，继续输入描述即可编辑");
     },
     [],
   );
@@ -533,8 +524,8 @@ export default function ImagePage() {
           try {
             const data =
               queuedTurn.mode === "edit"
-                ? await editImage(referenceFiles, queuedTurn.prompt, queuedTurn.model)
-                : await generateImage(queuedTurn.prompt, queuedTurn.model);
+                ? await editImage(referenceFiles, queuedTurn.prompt)
+                : await generateImage(queuedTurn.prompt);
             const first = data.data?.[0];
             if (!first?.b64_json) {
               throw new Error("未返回图片数据");
@@ -696,7 +687,7 @@ export default function ImagePage() {
     const draftTurn: ImageTurn = {
       id: turnId,
       prompt,
-      model: imageModel,
+      model: "auto",
       mode: imageMode,
       referenceImages: imageMode === "edit" ? referenceImages : [],
       count: parsedCount,
@@ -768,19 +759,14 @@ export default function ImagePage() {
           <ImageComposer
             mode={imageMode}
             prompt={imagePrompt}
-            model={imageModel}
             imageCount={imageCount}
             availableQuota={availableQuota}
             activeTaskCount={activeTaskCount}
-            selectedConversationTitle={selectedConversation?.title ?? null}
-            selectedConversationStats={selectedConversation ? selectedConversationStats : null}
             referenceImages={referenceImages}
             textareaRef={textareaRef}
             fileInputRef={fileInputRef}
-            imageModelOptions={imageModelOptions}
             onModeChange={setImageMode}
             onPromptChange={setImagePrompt}
-            onModelChange={setImageModel}
             onImageCountChange={setImageCount}
             onSubmit={handleSubmit}
             onPickReferenceImage={() => fileInputRef.current?.click()}

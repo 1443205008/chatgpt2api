@@ -3,7 +3,7 @@
 import { Clock3, LoaderCircle, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import type { ImageConversation, ImageTurnStatus, StoredImage } from "@/store/image-conversations";
+import type { ImageConversation, ImageTurnStatus, StoredImage, StoredReferenceImage } from "@/store/image-conversations";
 
 export type ImageLightboxItem = {
   id: string;
@@ -13,7 +13,7 @@ export type ImageLightboxItem = {
 type ImageResultsProps = {
   selectedConversation: ImageConversation | null;
   onOpenLightbox: (images: ImageLightboxItem[], index: number) => void;
-  onContinueEdit: (conversationId: string, image: StoredImage) => void;
+  onContinueEdit: (conversationId: string, image: StoredImage | StoredReferenceImage) => void;
   formatConversationTime: (value: string) => string;
 };
 
@@ -64,45 +64,49 @@ export function ImageResults({
         return (
           <div key={turn.id} className="flex flex-col gap-4">
             <div className="flex justify-end">
-              <div className="max-w-[82%] rounded-[28px] bg-stone-950 px-5 py-4 text-[15px] leading-7 text-white shadow-sm">
-                <div className="mb-2 flex flex-wrap items-center gap-2 text-[11px] text-white/70">
-                  <span className="rounded-full bg-white/10 px-2.5 py-1">第 {turnIndex + 1} 轮</span>
-                  <span className="rounded-full bg-white/10 px-2.5 py-1">
+              <div className="max-w-[82%] px-1 py-1 text-[15px] leading-7 text-stone-900">
+                <div className="mb-2 flex flex-wrap justify-end gap-2 text-[11px] text-stone-400">
+                  <span>第 {turnIndex + 1} 轮</span>
+                  <span>
                     {turn.mode === "edit" ? "编辑图" : "文生图"}
                   </span>
-                  <span className="rounded-full bg-white/10 px-2.5 py-1">{turn.model}</span>
-                  <span className="rounded-full bg-white/10 px-2.5 py-1">{getTurnStatusLabel(turn.status)}</span>
-                  <span className="rounded-full bg-white/10 px-2.5 py-1">{formatConversationTime(turn.createdAt)}</span>
+                  <span>{getTurnStatusLabel(turn.status)}</span>
+                  <span>{formatConversationTime(turn.createdAt)}</span>
                 </div>
-                <div>{turn.prompt}</div>
+                <div className="text-right">{turn.prompt}</div>
               </div>
             </div>
 
             <div className="flex justify-start">
-              <div className="w-full rounded-[28px] border border-stone-200/80 bg-white/85 p-4 shadow-[0_14px_40px_rgba(28,25,23,0.05)]">
+              <div className="w-full p-1">
                 {turn.referenceImages.length > 0 ? (
-                  <div className="mb-5 rounded-[22px] border border-stone-200/80 bg-stone-50/80 p-3">
+                  <div className="mb-4 flex flex-col items-end">
                     <div className="mb-3 text-xs font-medium text-stone-500">本轮参考图</div>
-                    <div
-                      className="grid gap-3"
-                      style={{
-                        gridTemplateColumns: `repeat(${Math.min(turn.referenceImages.length, 3)}, minmax(0, 1fr))`,
-                      }}
-                    >
+                    <div className="flex flex-wrap justify-end gap-3">
                       {turn.referenceImages.map((image, index) => (
-                        <button
-                          key={`${turn.id}-${image.name}-${index}`}
-                          type="button"
-                          onClick={() => onOpenLightbox(referenceLightboxImages, index)}
-                          className="group relative aspect-square overflow-hidden rounded-[18px] border border-stone-200/80 bg-stone-100/60 text-left transition hover:border-stone-300"
-                          aria-label={`预览参考图 ${image.name || index + 1}`}
-                        >
-                          <img
-                            src={image.dataUrl}
-                            alt={image.name || `参考图 ${index + 1}`}
-                            className="absolute inset-0 h-full w-full object-cover transition duration-200 group-hover:scale-[1.02]"
-                          />
-                        </button>
+                        <div key={`${turn.id}-${image.name}-${index}`} className="flex flex-col items-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => onOpenLightbox(referenceLightboxImages, index)}
+                            className="group relative h-24 w-24 overflow-hidden border border-stone-200/80 bg-stone-100/60 text-left transition hover:border-stone-300"
+                            aria-label={`预览参考图 ${image.name || index + 1}`}
+                          >
+                            <img
+                              src={image.dataUrl}
+                              alt={image.name || `参考图 ${index + 1}`}
+                              className="absolute inset-0 h-full w-full object-cover transition duration-200 group-hover:scale-[1.02]"
+                            />
+                          </button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="rounded-full border-stone-200 bg-white text-stone-700 hover:bg-stone-50"
+                            onClick={() => onContinueEdit(selectedConversation.id, image)}
+                          >
+                            <Sparkles className="size-4" />
+                            加入编辑
+                          </Button>
+                        </div>
                       ))}
                     </div>
                   </div>
@@ -124,7 +128,7 @@ export function ImageResults({
                       return (
                         <div
                           key={image.id}
-                          className="break-inside-avoid overflow-hidden rounded-[22px] border border-stone-200/80 bg-stone-50/60"
+                          className="break-inside-avoid overflow-hidden"
                         >
                           <button
                             type="button"
@@ -146,7 +150,7 @@ export function ImageResults({
                               onClick={() => onContinueEdit(selectedConversation.id, image)}
                             >
                               <Sparkles className="size-4" />
-                              继续编辑
+                              加入编辑
                             </Button>
                           </div>
                         </div>
@@ -157,7 +161,7 @@ export function ImageResults({
                       return (
                         <div
                           key={image.id}
-                          className="break-inside-avoid overflow-hidden rounded-[22px] border border-rose-200 bg-rose-50"
+                          className="break-inside-avoid overflow-hidden border border-rose-200 bg-rose-50"
                         >
                           <div className="flex min-h-[320px] items-center justify-center px-6 py-8 text-center text-sm leading-6 text-rose-600">
                             {image.error || "生成失败"}
@@ -169,7 +173,7 @@ export function ImageResults({
                     return (
                       <div
                         key={image.id}
-                        className="break-inside-avoid overflow-hidden rounded-[22px] border border-stone-200/80 bg-stone-100/80"
+                        className="break-inside-avoid overflow-hidden border border-stone-200/80 bg-stone-100/80"
                       >
                         <div className="flex min-h-[320px] flex-col items-center justify-center gap-3 px-6 py-8 text-center text-stone-500">
                           <div className="rounded-full bg-white p-3 shadow-sm">

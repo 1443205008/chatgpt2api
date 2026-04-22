@@ -2,7 +2,7 @@ import { httpRequest } from "@/lib/request";
 
 export type AccountType = "Free" | "Plus" | "ProLite" | "Pro" | "Team";
 export type AccountStatus = "正常" | "限流" | "异常" | "禁用";
-export type ImageModel = "gpt-image-1" | "gpt-image-2";
+export type ImageModel = "auto" | "gpt-image-1" | "gpt-image-2";
 
 export type Account = {
   id: string;
@@ -110,14 +110,14 @@ export async function updateAccount(
   });
 }
 
-export async function generateImage(prompt: string, model: ImageModel = "gpt-image-1") {
+export async function generateImage(prompt: string, model?: ImageModel) {
   return httpRequest<{ created: number; data: Array<{ b64_json: string; revised_prompt?: string }> }>(
     "/v1/images/generations",
     {
       method: "POST",
       body: {
         prompt,
-        model,
+        ...(model ? { model } : {}),
         n: 1,
         response_format: "b64_json",
       },
@@ -125,7 +125,7 @@ export async function generateImage(prompt: string, model: ImageModel = "gpt-ima
   );
 }
 
-export async function editImage(files: File | File[], prompt: string, model: ImageModel = "gpt-image-1") {
+export async function editImage(files: File | File[], prompt: string, model?: ImageModel) {
   const formData = new FormData();
   const uploadFiles = Array.isArray(files) ? files : [files];
 
@@ -133,7 +133,9 @@ export async function editImage(files: File | File[], prompt: string, model: Ima
     formData.append("image", file);
   });
   formData.append("prompt", prompt);
-  formData.append("model", model);
+  if (model) {
+    formData.append("model", model);
+  }
   formData.append("n", "1");
 
   return httpRequest<{ created: number; data: Array<{ b64_json: string; revised_prompt?: string }> }>(
