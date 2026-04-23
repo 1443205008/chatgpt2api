@@ -24,7 +24,10 @@ export type PageSizeOption = (typeof PAGE_SIZE_OPTIONS)[number];
 function normalizeConfig(config: SettingsConfig): SettingsConfig {
   return {
     ...config,
+    "auth-key": typeof config["auth-key"] === "string" ? config["auth-key"] : "",
+    refresh_account_interval_minute: Number(config.refresh_account_interval_minute || 5),
     proxy: typeof config.proxy === "string" ? config.proxy : "",
+    base_url: typeof config.base_url === "string" ? config.base_url : "",
   };
 }
 
@@ -75,7 +78,10 @@ type SettingsStore = {
   initialize: () => Promise<void>;
   loadConfig: () => Promise<void>;
   saveConfig: () => Promise<void>;
+  setAuthKey: (value: string) => void;
+  setRefreshAccountIntervalMinute: (value: string) => void;
   setProxy: (value: string) => void;
+  setBaseUrl: (value: string) => void;
 
   loadPools: (silent?: boolean) => Promise<void>;
   openAddDialog: () => void;
@@ -153,17 +159,48 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     try {
       const data = await updateSettingsConfig({
         ...config,
+        "auth-key": String(config["auth-key"] || "").trim(),
+        refresh_account_interval_minute: Math.max(1, Number(config.refresh_account_interval_minute) || 1),
         proxy: config.proxy.trim(),
+        base_url: String(config.base_url || "").trim(),
       });
       set({
         config: normalizeConfig(data.config),
       });
-      toast.success(config.proxy.trim() ? "代理已保存" : "已清空代理");
+      toast.success("配置已保存");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "保存系统配置失败");
     } finally {
       set({ isSavingConfig: false });
     }
+  },
+
+  setAuthKey: (value) => {
+    set((state) => {
+      if (!state.config) {
+        return {};
+      }
+      return {
+        config: {
+          ...state.config,
+          "auth-key": value,
+        },
+      };
+    });
+  },
+
+  setRefreshAccountIntervalMinute: (value) => {
+    set((state) => {
+      if (!state.config) {
+        return {};
+      }
+      return {
+        config: {
+          ...state.config,
+          refresh_account_interval_minute: value,
+        },
+      };
+    });
   },
 
   setProxy: (value) => {
@@ -175,6 +212,20 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         config: {
           ...state.config,
           proxy: value,
+        },
+      };
+    });
+  },
+
+  setBaseUrl: (value) => {
+    set((state) => {
+      if (!state.config) {
+        return {};
+      }
+      return {
+        config: {
+          ...state.config,
+          base_url: value,
         },
       };
     });

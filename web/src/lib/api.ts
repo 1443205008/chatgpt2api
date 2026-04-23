@@ -51,8 +51,9 @@ type AccountUpdateResponse = {
 
 export type SettingsConfig = {
   proxy: string;
+  base_url?: string;
   "auth-key"?: string;
-  refresh_account_interval_minute?: number;
+  refresh_account_interval_minute?: number | string;
   [key: string]: unknown;
 };
 

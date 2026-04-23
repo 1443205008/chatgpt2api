@@ -2,10 +2,10 @@
 
 import { useEffect, useRef } from "react";
 
+import { ConfigCard } from "./components/config-card";
 import { CPAPoolDialog } from "./components/cpa-pool-dialog";
 import { CPAPoolsCard } from "./components/cpa-pools-card";
 import { ImportBrowserDialog } from "./components/import-browser-dialog";
-import { ProxySettingsCard } from "./components/proxy-settings-card";
 import { SettingsHeader } from "./components/settings-header";
 import { Sub2APIConnections } from "./components/sub2api-connections";
 import { useSettingsStore } from "./store";
@@ -48,7 +48,7 @@ export default function SettingsPage() {
       <SettingsDataController />
       <SettingsHeader />
       <section className="space-y-6">
-        <ProxySettingsCard />
+        <ConfigCard />
         <CPAPoolsCard />
         <Sub2APIConnections />
       </section>
