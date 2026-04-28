@@ -9,6 +9,7 @@ import {
   type AuthRole,
   type StoredAuthSession,
 } from "@/store/auth";
+import { getSub2APIEmbeddedConfig } from "@/lib/sub2api-embedded";
 
 type UseAuthGuardResult = {
   isCheckingAuth: boolean;
@@ -26,6 +27,25 @@ export function useAuthGuard(allowedRoles?: AuthRole[]): UseAuthGuardResult {
 
     const load = async () => {
       const roleList = allowedRolesKey ? (allowedRolesKey.split(",") as AuthRole[]) : [];
+      const embeddedConfig = getSub2APIEmbeddedConfig();
+      if (embeddedConfig) {
+        const embeddedSession: StoredAuthSession = {
+          key: embeddedConfig.token,
+          role: "user",
+          subjectId: embeddedConfig.userId || "sub2api",
+          name: "Sub2API 用户",
+        };
+        if (roleList.length > 0 && !roleList.includes(embeddedSession.role)) {
+          setSession(embeddedSession);
+          setIsCheckingAuth(false);
+          router.replace(getDefaultRouteForRole(embeddedSession.role));
+          return;
+        }
+        setSession(embeddedSession);
+        setIsCheckingAuth(false);
+        return;
+      }
+
       const storedSession = await getStoredAuthSession();
       if (!active) {
         return;
@@ -66,6 +86,11 @@ export function useRedirectIfAuthenticated() {
     let active = true;
 
     const load = async () => {
+      if (getSub2APIEmbeddedConfig()) {
+        router.replace("/image");
+        return;
+      }
+
       const storedSession = await getStoredAuthSession();
       if (!active) {
         return;

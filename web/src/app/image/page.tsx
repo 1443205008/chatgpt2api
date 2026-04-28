@@ -17,7 +17,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { editImage, fetchAccounts, generateImage, type Account } from "@/lib/api";
+import { editImage, fetchAccounts, fetchEmbeddedBalance, generateImage, type Account } from "@/lib/api";
+import { isSub2APIEmbedded } from "@/lib/sub2api-embedded";
 import { useAuthGuard } from "@/lib/use-auth-guard";
 import {
   clearImageConversations,
@@ -174,7 +175,7 @@ async function recoverConversationHistory(items: ImageConversation[]) {
   return normalized;
 }
 
-function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
+function ImagePageContent({ isAdmin, isEmbedded }: { isAdmin: boolean; isEmbedded: boolean }) {
   const didLoadQuotaRef = useRef(false);
   const conversationsRef = useRef<ImageConversation[]>([]);
   const resultsViewportRef = useRef<HTMLDivElement>(null);
@@ -262,6 +263,15 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
   }, []);
 
   const loadQuota = useCallback(async () => {
+    if (isEmbedded) {
+      try {
+        const balance = await fetchEmbeddedBalance();
+        setAvailableQuota(typeof balance === "number" ? balance.toFixed(4) : "--");
+      } catch {
+        setAvailableQuota((prev) => (prev === "加载中..." ? "--" : prev));
+      }
+      return;
+    }
     if (!isAdmin) {
       setAvailableQuota("--");
       return;
@@ -272,7 +282,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     } catch {
       setAvailableQuota((prev) => (prev === "加载中..." ? "--" : prev));
     }
-  }, [isAdmin]);
+  }, [isAdmin, isEmbedded]);
 
   useEffect(() => {
     if (didLoadQuotaRef.current) {
@@ -947,5 +957,5 @@ export default function ImagePage() {
     );
   }
 
-  return <ImagePageContent isAdmin={session.role === "admin"} />;
+  return <ImagePageContent isAdmin={session.role === "admin"} isEmbedded={isSub2APIEmbedded()} />;
 }

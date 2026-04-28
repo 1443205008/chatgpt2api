@@ -1,4 +1,10 @@
 import { httpRequest } from "@/lib/request";
+import {
+  editImageViaSub2API,
+  fetchSub2APIEmbeddedBalance,
+  generateImageViaSub2API,
+  isSub2APIEmbedded,
+} from "@/lib/sub2api-embedded";
 
 export type AccountType = "Free" | "Plus" | "ProLite" | "Pro" | "Team";
 export type AccountStatus = "正常" | "限流" | "异常" | "禁用";
@@ -192,6 +198,9 @@ export async function updateAccount(
 }
 
 export async function generateImage(prompt: string, model?: ImageModel, size?: string) {
+  if (isSub2APIEmbedded()) {
+    return generateImageViaSub2API(prompt, model, size);
+  }
   return httpRequest<ImageResponse>(
     "/v1/images/generations",
     {
@@ -208,6 +217,9 @@ export async function generateImage(prompt: string, model?: ImageModel, size?: s
 }
 
 export async function editImage(files: File | File[], prompt: string, model?: ImageModel, size?: string) {
+  if (isSub2APIEmbedded()) {
+    return editImageViaSub2API(files, prompt, model, size);
+  }
   const formData = new FormData();
   const uploadFiles = Array.isArray(files) ? files : [files];
 
@@ -230,6 +242,13 @@ export async function editImage(files: File | File[], prompt: string, model?: Im
       body: formData,
     },
   );
+}
+
+export async function fetchEmbeddedBalance() {
+  if (!isSub2APIEmbedded()) {
+    return undefined;
+  }
+  return fetchSub2APIEmbeddedBalance();
 }
 
 export async function fetchSettingsConfig() {
