@@ -118,20 +118,25 @@ class LoggedCall:
     endpoint: str
     model: str
     summary: str
+    quota_units: int = 0
     started: float = field(default_factory=time.time)
 
     async def run(self, handler, *args, sse: str = "openai"):
         from services.protocol.conversation import ImageGenerationError
 
+        self._reserve_quota()
         try:
             result = await run_in_threadpool(handler, *args)
         except ImageGenerationError as exc:
+            self._refund_quota()
             self.log("调用失败", status="failed", error=str(exc))
             return _image_error_response(exc)
         except HTTPException as exc:
+            self._refund_quota()
             self.log("调用失败", status="failed", error=str(exc.detail))
             raise
         except Exception as exc:
+            self._refund_quota()
             self.log("调用失败", status="failed", error=str(exc))
             raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
 
@@ -143,18 +148,48 @@ class LoggedCall:
         try:
             has_first, first = await run_in_threadpool(_next_item, result)
         except ImageGenerationError as exc:
+            self._refund_quota()
             self.log("调用失败", status="failed", error=str(exc))
             return _image_error_response(exc)
         except HTTPException as exc:
+            self._refund_quota()
             self.log("调用失败", status="failed", error=str(exc.detail))
             raise
         except Exception as exc:
+            self._refund_quota()
             self.log("调用失败", status="failed", error=str(exc))
             raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
         if not has_first:
             self.log("流式调用结束")
             return StreamingResponse(sender(()), media_type="text/event-stream")
         return StreamingResponse(sender(self.stream(itertools.chain([first], result))), media_type="text/event-stream")
+
+    def _reserve_quota(self) -> None:
+        quota_units = max(0, int(self.quota_units or 0))
+        if quota_units <= 0 or self.identity.get("role") != "user":
+            return
+
+        from services.auth_service import ApiKeyQuotaExceeded, auth_service
+
+        try:
+            updated = auth_service.reserve_quota(str(self.identity.get("id") or ""), quota_units)
+        except ApiKeyQuotaExceeded as exc:
+            self.log("额度不足", status="failed", error=str(exc))
+            raise HTTPException(status_code=429, detail={"error": str(exc)}) from exc
+        if updated is None:
+            raise HTTPException(status_code=401, detail={"error": "authorization is invalid"})
+        self.identity = updated
+
+    def _refund_quota(self) -> None:
+        quota_units = max(0, int(self.quota_units or 0))
+        if quota_units <= 0 or self.identity.get("role") != "user":
+            return
+
+        from services.auth_service import auth_service
+
+        updated = auth_service.refund_quota(str(self.identity.get("id") or ""), quota_units)
+        if updated is not None:
+            self.identity = updated
 
     def stream(self, items):
         urls: list[str] = []
@@ -184,6 +219,11 @@ class LoggedCall:
             "duration_ms": int((time.time() - self.started) * 1000),
             "status": status,
         }
+        if self.quota_units > 0:
+            detail["quota_units"] = self.quota_units
+            detail["quota_limit"] = self.identity.get("quota_limit")
+            detail["quota_used"] = self.identity.get("quota_used")
+            detail["quota_remaining"] = self.identity.get("quota_remaining")
         if error:
             detail["error"] = error
         collected_urls = [*(urls or []), *_collect_urls(result)]

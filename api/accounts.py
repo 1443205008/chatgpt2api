@@ -8,6 +8,7 @@ from services.auth_service import auth_service
 
 from api.support import (
     require_admin,
+    require_identity,
     sanitize_cpa_pool,
     sanitize_cpa_pools,
     sanitize_sub2api_server,
@@ -26,11 +27,14 @@ from services.sub2api_service import (
 
 class UserKeyCreateRequest(BaseModel):
     name: str = ""
+    quota_limit: int = Field(default=0, ge=0)
 
 
 class UserKeyUpdateRequest(BaseModel):
     name: str | None = None
     enabled: bool | None = None
+    quota_limit: int | None = Field(default=None, ge=0)
+    reset_quota: bool | None = None
 
 
 class AccountCreateRequest(BaseModel):
@@ -93,6 +97,10 @@ class Sub2APIImportRequest(BaseModel):
 def create_router() -> APIRouter:
     router = APIRouter()
 
+    @router.get("/api/auth/me")
+    async def get_current_identity(authorization: str | None = Header(default=None)):
+        return {"identity": require_identity(authorization)}
+
     @router.get("/api/auth/users")
     async def list_user_keys(authorization: str | None = Header(default=None)):
         require_admin(authorization)
@@ -101,7 +109,7 @@ def create_router() -> APIRouter:
     @router.post("/api/auth/users")
     async def create_user_key(body: UserKeyCreateRequest, authorization: str | None = Header(default=None)):
         require_admin(authorization)
-        item, raw_key = auth_service.create_key(role="user", name=body.name)
+        item, raw_key = auth_service.create_key(role="user", name=body.name, quota_limit=body.quota_limit)
         return {"item": item, "key": raw_key, "items": auth_service.list_keys(role="user")}
 
     @router.post("/api/auth/users/{key_id}")
@@ -116,6 +124,8 @@ def create_router() -> APIRouter:
             for key, value in {
                 "name": body.name,
                 "enabled": body.enabled,
+                "quota_limit": body.quota_limit,
+                "reset_quota": True if body.reset_quota else None,
             }.items()
             if value is not None
         }

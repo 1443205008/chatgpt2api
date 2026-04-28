@@ -31,6 +31,9 @@ def create_router(app_version: str) -> APIRouter:
             "role": identity.get("role"),
             "subject_id": identity.get("id"),
             "name": identity.get("name"),
+            "quota_limit": identity.get("quota_limit", 0),
+            "quota_used": identity.get("quota_used", 0),
+            "quota_remaining": identity.get("quota_remaining"),
         }
 
     @router.get("/version")
@@ -75,4 +78,3 @@ def create_router(app_version: str) -> APIRouter:
         }
 
     return router
-

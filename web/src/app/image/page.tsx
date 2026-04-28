@@ -17,7 +17,14 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { editImage, fetchAccounts, generateImage, type Account } from "@/lib/api";
+import {
+  editImage,
+  fetchAccounts,
+  fetchCurrentIdentity,
+  generateImage,
+  type Account,
+  type AuthIdentity,
+} from "@/lib/api";
 import { useAuthGuard } from "@/lib/use-auth-guard";
 import {
   clearImageConversations,
@@ -62,6 +69,15 @@ function formatConversationTime(value: string) {
 function formatAvailableQuota(accounts: Account[]) {
   const availableAccounts = accounts.filter((account) => account.status !== "禁用");
   return String(availableAccounts.reduce((sum, account) => sum + Math.max(0, account.quota), 0));
+}
+
+function formatUserQuota(identity: AuthIdentity) {
+  const limit = Number(identity.quota_limit || 0);
+  const used = Number(identity.quota_used || 0);
+  if (limit <= 0) {
+    return "不限";
+  }
+  return String(Math.max(0, Number(identity.quota_remaining ?? limit - used)));
 }
 
 function createId() {
@@ -263,7 +279,12 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
 
   const loadQuota = useCallback(async () => {
     if (!isAdmin) {
-      setAvailableQuota("--");
+      try {
+        const data = await fetchCurrentIdentity();
+        setAvailableQuota(formatUserQuota(data.identity));
+      } catch {
+        setAvailableQuota((prev) => (prev === "加载中..." ? "--" : prev));
+      }
       return;
     }
     try {
@@ -705,6 +726,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
             ),
           };
         });
+        await loadQuota();
         toast.error(message);
       } finally {
         activeConversationQueueIds.delete(conversationId);

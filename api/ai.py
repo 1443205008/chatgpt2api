@@ -14,6 +14,7 @@ from services.protocol import (
     openai_v1_models,
     openai_v1_response,
 )
+from utils.helper import is_image_chat_request, parse_image_count
 
 
 class ImageGenerationRequest(BaseModel):
@@ -53,6 +54,12 @@ class AnthropicMessageRequest(BaseModel):
     stream: bool | None = None
 
 
+def _chat_quota_units(payload: dict[str, object]) -> int:
+    if is_image_chat_request(payload):
+        return parse_image_count(payload.get("n"))
+    return 1
+
+
 def create_router() -> APIRouter:
     router = APIRouter()
 
@@ -73,7 +80,7 @@ def create_router() -> APIRouter:
         identity = require_identity(authorization)
         payload = body.model_dump(mode="python")
         payload["base_url"] = resolve_image_base_url(request)
-        call = LoggedCall(identity, "/v1/images/generations", body.model, "文生图")
+        call = LoggedCall(identity, "/v1/images/generations", body.model, "文生图", quota_units=body.n)
         return await call.run(openai_v1_image_generations.handle, payload)
 
     @router.post("/v1/images/edits")
@@ -111,7 +118,7 @@ def create_router() -> APIRouter:
             "stream": stream,
             "base_url": resolve_image_base_url(request),
         }
-        call = LoggedCall(identity, "/v1/images/edits", model, "图生图")
+        call = LoggedCall(identity, "/v1/images/edits", model, "图生图", quota_units=n)
         return await call.run(openai_v1_image_edit.handle, payload)
 
     @router.post("/v1/chat/completions")
@@ -119,7 +126,7 @@ def create_router() -> APIRouter:
         identity = require_identity(authorization)
         payload = body.model_dump(mode="python")
         model = str(payload.get("model") or "auto")
-        call = LoggedCall(identity, "/v1/chat/completions", model, "文本生成")
+        call = LoggedCall(identity, "/v1/chat/completions", model, "文本生成", quota_units=_chat_quota_units(payload))
         return await call.run(openai_v1_chat_complete.handle, payload)
 
     @router.post("/v1/responses")
@@ -127,7 +134,7 @@ def create_router() -> APIRouter:
         identity = require_identity(authorization)
         payload = body.model_dump(mode="python")
         model = str(payload.get("model") or "auto")
-        call = LoggedCall(identity, "/v1/responses", model, "Responses")
+        call = LoggedCall(identity, "/v1/responses", model, "Responses", quota_units=1)
         return await call.run(openai_v1_response.handle, payload)
 
     @router.post("/v1/messages")
@@ -140,7 +147,7 @@ def create_router() -> APIRouter:
         identity = require_identity(authorization or (f"Bearer {x_api_key}" if x_api_key else None))
         payload = body.model_dump(mode="python")
         model = str(payload.get("model") or "auto")
-        call = LoggedCall(identity, "/v1/messages", model, "Messages")
+        call = LoggedCall(identity, "/v1/messages", model, "Messages", quota_units=1)
         return await call.run(anthropic_v1_messages.handle, payload, sse="anthropic")
 
     return router

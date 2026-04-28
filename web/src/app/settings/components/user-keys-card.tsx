@@ -1,7 +1,17 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Ban, CheckCircle2, Copy, KeyRound, LoaderCircle, Plus, Trash2 } from "lucide-react";
+import {
+  Ban,
+  CheckCircle2,
+  Copy,
+  KeyRound,
+  LoaderCircle,
+  Plus,
+  RotateCcw,
+  Save,
+  Trash2,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -35,22 +45,52 @@ function formatDateTime(value?: string | null) {
   }).format(date);
 }
 
+function parseQuotaLimit(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return 0;
+  }
+  const parsed = Number(trimmed);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error("额度上限必须是大于等于 0 的整数");
+  }
+  return parsed;
+}
+
+function formatQuota(item: UserKey) {
+  const limit = Number(item.quota_limit || 0);
+  const used = Number(item.quota_used || 0);
+  if (limit <= 0) {
+    return `已用 ${used} / 不限`;
+  }
+  return `已用 ${used} / ${limit}，剩余 ${Math.max(0, Number(item.quota_remaining ?? limit - used))}`;
+}
+
 export function UserKeysCard() {
   const didLoadRef = useRef(false);
   const [items, setItems] = useState<UserKey[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [name, setName] = useState("");
+  const [quotaLimit, setQuotaLimit] = useState("");
   const [isCreating, setIsCreating] = useState(false);
   const [pendingIds, setPendingIds] = useState<Set<string>>(() => new Set());
+  const [quotaInputs, setQuotaInputs] = useState<Record<string, string>>({});
   const [revealedKey, setRevealedKey] = useState("");
   const [deletingItem, setDeletingItem] = useState<UserKey | null>(null);
+
+  const applyItems = (nextItems: UserKey[]) => {
+    setItems(nextItems);
+    setQuotaInputs(
+      Object.fromEntries(nextItems.map((item) => [item.id, String(Number(item.quota_limit || 0))])),
+    );
+  };
 
   const load = async () => {
     setIsLoading(true);
     try {
       const data = await fetchUserKeys();
-      setItems(data.items);
+      applyItems(data.items);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "加载用户密钥失败");
     } finally {
@@ -67,12 +107,20 @@ export function UserKeysCard() {
   }, []);
 
   const handleCreate = async () => {
+    let parsedQuotaLimit = 0;
+    try {
+      parsedQuotaLimit = parseQuotaLimit(quotaLimit);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "额度上限格式不正确");
+      return;
+    }
     setIsCreating(true);
     try {
-      const data = await createUserKey(name.trim());
-      setItems(data.items);
+      const data = await createUserKey(name.trim(), parsedQuotaLimit);
+      applyItems(data.items);
       setRevealedKey(data.key);
       setName("");
+      setQuotaLimit("");
       setIsDialogOpen(false);
       toast.success("用户密钥已创建");
     } catch (error) {
@@ -98,10 +146,43 @@ export function UserKeysCard() {
     setItemPending(item.id, true);
     try {
       const data = await updateUserKey(item.id, { enabled: !item.enabled });
-      setItems(data.items);
+      applyItems(data.items);
       toast.success(item.enabled ? "用户密钥已禁用" : "用户密钥已启用");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "更新用户密钥失败");
+    } finally {
+      setItemPending(item.id, false);
+    }
+  };
+
+  const handleQuotaUpdate = async (item: UserKey) => {
+    let parsedQuotaLimit = 0;
+    try {
+      parsedQuotaLimit = parseQuotaLimit(quotaInputs[item.id] ?? "");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "额度上限格式不正确");
+      return;
+    }
+    setItemPending(item.id, true);
+    try {
+      const data = await updateUserKey(item.id, { quota_limit: parsedQuotaLimit });
+      applyItems(data.items);
+      toast.success("用户密钥额度已更新");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "更新用户密钥额度失败");
+    } finally {
+      setItemPending(item.id, false);
+    }
+  };
+
+  const handleQuotaReset = async (item: UserKey) => {
+    setItemPending(item.id, true);
+    try {
+      const data = await updateUserKey(item.id, { reset_quota: true });
+      applyItems(data.items);
+      toast.success("用户密钥用量已重置");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "重置用户密钥用量失败");
     } finally {
       setItemPending(item.id, false);
     }
@@ -115,7 +196,7 @@ export function UserKeysCard() {
     setItemPending(item.id, true);
     try {
       const data = await deleteUserKey(item.id);
-      setItems(data.items);
+      applyItems(data.items);
       setDeletingItem(null);
       toast.success("用户密钥已删除");
     } catch (error) {
@@ -145,7 +226,7 @@ export function UserKeysCard() {
               </div>
               <div>
                 <h2 className="text-lg font-semibold tracking-tight">用户密钥管理</h2>
-                <p className="text-sm text-stone-500">为普通用户创建专用密钥；普通用户只能进入画图页，不能查看设置和号池。</p>
+                <p className="text-sm text-stone-500">为普通用户创建专用密钥，并按密钥限制可用额度；0 表示不限制。</p>
               </div>
             </div>
             <Button className="h-9 rounded-xl bg-stone-950 px-4 text-white hover:bg-stone-800" onClick={() => setIsDialogOpen(true)}>
@@ -196,10 +277,43 @@ export function UserKeysCard() {
                       <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-stone-500">
                         <span>创建时间 {formatDateTime(item.created_at)}</span>
                         <span>最近使用 {formatDateTime(item.last_used_at)}</span>
+                        <span>额度 {formatQuota(item)}</span>
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="flex items-center gap-2 rounded-xl border border-stone-200 bg-stone-50 px-2 py-1">
+                        <span className="whitespace-nowrap text-xs text-stone-500">上限</span>
+                        <Input
+                          type="number"
+                          min="0"
+                          step="1"
+                          value={quotaInputs[item.id] ?? String(Number(item.quota_limit || 0))}
+                          onChange={(event) => setQuotaInputs((current) => ({ ...current, [item.id]: event.target.value }))}
+                          className="h-8 w-20 rounded-lg border-stone-200 bg-white px-2 text-sm"
+                          disabled={isPending}
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="h-8 rounded-lg border-stone-200 bg-white px-3 text-xs text-stone-700"
+                          onClick={() => void handleQuotaUpdate(item)}
+                          disabled={isPending}
+                        >
+                          {isPending ? <LoaderCircle className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}
+                          保存
+                        </Button>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="h-9 rounded-xl border-stone-200 bg-white px-4 text-stone-700"
+                        onClick={() => void handleQuotaReset(item)}
+                        disabled={isPending}
+                      >
+                        {isPending ? <LoaderCircle className="size-4 animate-spin" /> : <RotateCcw className="size-4" />}
+                        重置用量
+                      </Button>
                       <Button
                         type="button"
                         variant="outline"
@@ -251,6 +365,19 @@ export function UserKeysCard() {
               placeholder="例如：设计同学 A、运营临时账号"
               className="h-11 rounded-xl border-stone-200 bg-white"
             />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-stone-700">额度上限</label>
+            <Input
+              type="number"
+              min="0"
+              step="1"
+              value={quotaLimit}
+              onChange={(event) => setQuotaLimit(event.target.value)}
+              placeholder="0 表示不限"
+              className="h-11 rounded-xl border-stone-200 bg-white"
+            />
+            <div className="text-xs text-stone-500">普通用户每次 AI 调用会消耗额度；生图/图生图按张数消耗。</div>
           </div>
           <DialogFooter>
             <Button
