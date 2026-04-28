@@ -111,6 +111,16 @@ class ConfigStore:
             return 30
 
     @property
+    def image_queue_timeout_seconds(self) -> float:
+        try:
+            return max(
+                1.0,
+                float(os.getenv("CHATGPT2API_IMAGE_QUEUE_TIMEOUT_SECONDS") or self.data.get("image_queue_timeout_seconds", 8)),
+            )
+        except (TypeError, ValueError):
+            return 8.0
+
+    @property
     def auto_remove_invalid_accounts(self) -> bool:
         value = self.data.get("auto_remove_invalid_accounts", False)
         if isinstance(value, str):
@@ -172,6 +182,7 @@ class ConfigStore:
         data = dict(self.data)
         data["refresh_account_interval_minute"] = self.refresh_account_interval_minute
         data["image_retention_days"] = self.image_retention_days
+        data["image_queue_timeout_seconds"] = self.image_queue_timeout_seconds
         data["auto_remove_invalid_accounts"] = self.auto_remove_invalid_accounts
         data["auto_remove_rate_limited_accounts"] = self.auto_remove_rate_limited_accounts
         data["log_levels"] = self.log_levels

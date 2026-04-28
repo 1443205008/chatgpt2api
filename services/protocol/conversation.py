@@ -537,12 +537,17 @@ def stream_image_outputs_with_pool(request: ConversationRequest) -> Iterator[Ima
     last_error = ""
     for index in range(1, request.n + 1):
         while True:
+            token = ""
             try:
-                token = account_service.get_available_access_token()
+                token = account_service.acquire_image_access_token()
             except RuntimeError as exc:
                 if emitted:
                     return
-                raise ImageGenerationError(str(exc) or "image generation failed") from exc
+                message = str(exc) or "image generation failed"
+                status_code = 429 if "busy" in message.lower() else 502
+                error_type = "rate_limit_error" if status_code == 429 else "server_error"
+                code = "rate_limit_exceeded" if status_code == 429 else "upstream_error"
+                raise ImageGenerationError(message, status_code=status_code, error_type=error_type, code=code) from exc
 
             emitted_for_token = False
             returned_message = False
@@ -578,6 +583,8 @@ def stream_image_outputs_with_pool(request: ConversationRequest) -> Iterator[Ima
                     account_service.remove_invalid_token(token, "image_stream")
                     continue
                 raise ImageGenerationError(last_error or "image generation failed") from exc
+            finally:
+                account_service.release_image_access_token(token)
 
     if not emitted:
         raise ImageGenerationError(last_error or "image generation failed")

@@ -107,6 +107,29 @@ function dataUrlToFile(dataUrl: string, fileName: string, mimeType?: string) {
   return new File([bytes], fileName, { type: mimeType || matchedMimeType || "image/png" });
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function isImageQueueBusyError(error: unknown) {
+  return error instanceof Error && error.message.toLowerCase().includes("image generation queue is busy");
+}
+
+async function runImageRequestWithRetry<T>(request: () => Promise<T>) {
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await request();
+    } catch (error) {
+      if (!isImageQueueBusyError(error) || attempt >= maxAttempts) {
+        throw error;
+      }
+      await sleep(1500 * attempt);
+    }
+  }
+  return request();
+}
+
 function buildReferenceImageFromResult(image: StoredImage, fileName: string): StoredReferenceImage | null {
   if (!image.b64_json) {
     return null;
@@ -619,12 +642,15 @@ function ImagePageContent({ isAdmin, conversationNamespace }: { isAdmin: boolean
           return;
         }
 
-        const tasks = pendingImages.map(async (pendingImage) => {
+        let resumedSuccessCount = 0;
+        let resumedFailedCount = 0;
+        for (const pendingImage of pendingImages) {
           try {
-            const data =
+            const data = await runImageRequestWithRetry(() =>
               queuedTurn.mode === "edit"
-                ? await editImage(referenceFiles, queuedTurn.prompt, queuedTurn.model, queuedTurn.size)
-                : await generateImage(queuedTurn.prompt, queuedTurn.model, queuedTurn.size);
+                ? editImage(referenceFiles, queuedTurn.prompt, queuedTurn.model, queuedTurn.size)
+                : generateImage(queuedTurn.prompt, queuedTurn.model, queuedTurn.size),
+            );
             const first = data.data?.[0];
             if (!first?.b64_json) {
               throw new Error("未返回图片数据");
@@ -656,7 +682,7 @@ function ImagePageContent({ isAdmin, conversationNamespace }: { isAdmin: boolean
               { persist: false },
             );
 
-            return nextImage;
+            resumedSuccessCount += 1;
           } catch (error) {
             const message = error instanceof Error ? error.message : "生成失败";
             const failedImage: StoredImage = {
@@ -685,15 +711,10 @@ function ImagePageContent({ isAdmin, conversationNamespace }: { isAdmin: boolean
               { persist: false },
             );
 
-            throw error;
+            resumedFailedCount += 1;
           }
-        });
+        }
 
-        const settled = await Promise.allSettled(tasks);
-        const resumedSuccessCount = settled.filter(
-          (item): item is PromiseFulfilledResult<StoredImage> => item.status === "fulfilled",
-        ).length;
-        const resumedFailedCount = settled.length - resumedSuccessCount;
         const existingSuccessCount = queuedTurn.images.filter((image) => image.status === "success").length;
         const existingFailedCount = queuedTurn.images.filter((image) => image.status === "error").length;
         const successCount = existingSuccessCount + resumedSuccessCount;

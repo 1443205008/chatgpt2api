@@ -4,7 +4,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import base64
 import hashlib
 import json
-from threading import Lock
+import time
+from threading import Condition, Lock
 from typing import Any
 from datetime import datetime
 
@@ -36,6 +37,8 @@ class AccountService:
     def __init__(self, storage_backend: StorageBackend):
         self.storage = storage_backend
         self._lock = Lock()
+        self._image_condition = Condition(self._lock)
+        self._image_inflight_tokens: set[str] = set()
         self._index = 0
         self._accounts = self._load_accounts()
 
@@ -242,6 +245,60 @@ class AccountService:
             access_token = tokens[self._index % len(tokens)]
             self._index += 1
             return access_token
+
+    def _reserve_next_image_token_locked(self, attempted_tokens: set[str]) -> tuple[str, str]:
+        tokens = self._list_available_candidate_tokens()
+        if not tokens:
+            return "", "empty"
+        candidates = [
+            token
+            for token in tokens
+            if token not in self._image_inflight_tokens and token not in attempted_tokens
+        ]
+        if candidates:
+            access_token = candidates[self._index % len(candidates)]
+            self._index += 1
+            self._image_inflight_tokens.add(access_token)
+            return access_token, "reserved"
+        if any(token in self._image_inflight_tokens for token in tokens):
+            return "", "busy"
+        return "", "empty"
+
+    def acquire_image_access_token(self) -> str:
+        attempted_tokens: set[str] = set()
+        deadline = time.monotonic() + config.image_queue_timeout_seconds
+        while True:
+            with self._image_condition:
+                access_token, state = self._reserve_next_image_token_locked(attempted_tokens)
+                if not access_token and state == "empty":
+                    raise RuntimeError("no available image quota")
+                if not access_token:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise RuntimeError("image generation queue is busy")
+                    self._image_condition.wait(min(1.0, remaining))
+                    continue
+
+            token_ref = anonymize_token(access_token)
+            account = self.refresh_account_state(access_token)
+            if self._is_image_account_available(account or {}):
+                return access_token
+            attempted_tokens.add(access_token)
+            self.release_image_access_token(access_token)
+            print(
+                f"[account-available] skip token={token_ref} "
+                f"quota={account.get('quota') if account else 'unknown'} "
+                f"status={account.get('status') if account else 'unknown'}"
+            )
+
+    def release_image_access_token(self, access_token: str) -> None:
+        access_token = self._clean_token(access_token)
+        if not access_token:
+            return
+        with self._image_condition:
+            if access_token in self._image_inflight_tokens:
+                self._image_inflight_tokens.remove(access_token)
+                self._image_condition.notify_all()
 
     def refresh_account_state(self, access_token: str) -> dict | None:
         token_ref = anonymize_token(access_token)
