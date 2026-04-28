@@ -10,11 +10,12 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { login } from "@/lib/api";
 import { useRedirectIfAuthenticated } from "@/lib/use-auth-guard";
-import { getDefaultRouteForRole, setStoredAuthSession } from "@/store/auth";
+import { buildUserConversationNamespace, getDefaultRouteForRole, setStoredAuthSession } from "@/store/auth";
 
 export default function LoginPage() {
   const router = useRouter();
   const [authKey, setAuthKey] = useState("");
+  const [sessionPassword, setSessionPassword] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const { isCheckingAuth } = useRedirectIfAuthenticated();
 
@@ -28,11 +29,21 @@ export default function LoginPage() {
     setIsSubmitting(true);
     try {
       const data = await login(normalizedAuthKey);
+      const normalizedSessionPassword = sessionPassword.trim();
+      if (data.role === "user" && !normalizedSessionPassword) {
+        toast.error("普通用户请填写会话密码");
+        return;
+      }
+      const conversationNamespace =
+        data.role === "user"
+          ? await buildUserConversationNamespace(data.subject_id, normalizedSessionPassword)
+          : "";
       await setStoredAuthSession({
         key: normalizedAuthKey,
         role: data.role,
         subjectId: data.subject_id,
         name: data.name,
+        conversationNamespace,
       });
       router.replace(getDefaultRouteForRole(data.role));
     } catch (error) {
@@ -82,6 +93,28 @@ export default function LoginPage() {
               placeholder="请输入密钥"
               className="h-13 rounded-2xl border-stone-200 bg-white px-4"
             />
+          </div>
+
+          <div className="space-y-3">
+            <label htmlFor="session-password" className="block text-sm font-medium text-stone-700">
+              会话密码（普通用户）
+            </label>
+            <Input
+              id="session-password"
+              type="password"
+              value={sessionPassword}
+              onChange={(event) => setSessionPassword(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  void handleLogin();
+                }
+              }}
+              placeholder="普通用户必填，用于隔离对话历史"
+              className="h-13 rounded-2xl border-stone-200 bg-white px-4"
+            />
+            <p className="text-xs leading-5 text-stone-500">
+              会话密码只用于生成当前浏览器本地历史分区，不会发送到后端；同一密钥使用不同会话密码会看到不同的图片对话历史。
+            </p>
           </div>
 
           <Button

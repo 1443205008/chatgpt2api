@@ -14,6 +14,7 @@ type ImageComposerProps = {
   prompt: string;
   imageCount: string;
   imageSize: string;
+  maxImageCount: number;
   availableQuota: string;
   activeTaskCount: number;
   referenceImages: Array<{ name: string; dataUrl: string }>;
@@ -34,6 +35,7 @@ export function ImageComposer({
   prompt,
   imageCount,
   imageSize,
+  maxImageCount,
   availableQuota,
   activeTaskCount,
   referenceImages,
@@ -202,7 +204,7 @@ export function ImageComposer({
                     <Input
                       type="number"
                       min="1"
-                      max="10"
+                      max={maxImageCount}
                       step="1"
                       value={imageCount}
                       onChange={(event) => onImageCountChange(event.target.value)}

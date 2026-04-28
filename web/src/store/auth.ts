@@ -9,6 +9,7 @@ export type StoredAuthSession = {
   role: AuthRole;
   subjectId: string;
   name: string;
+  conversationNamespace?: string;
 };
 
 export const AUTH_KEY_STORAGE_KEY = "chatgpt2api_auth_key";
@@ -18,6 +19,20 @@ const authStorage = localforage.createInstance({
   name: "chatgpt2api",
   storeName: "auth",
 });
+
+async function hashText(value: string) {
+  if (typeof crypto !== "undefined" && crypto.subtle) {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+    return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  }
+
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
 
 function normalizeSession(value: unknown, fallbackKey = ""): StoredAuthSession | null {
   if (!value || typeof value !== "object") {
@@ -36,6 +51,7 @@ function normalizeSession(value: unknown, fallbackKey = ""): StoredAuthSession |
     role,
     subjectId: String(candidate.subjectId || "").trim(),
     name: String(candidate.name || "").trim(),
+    conversationNamespace: String(candidate.conversationNamespace || "").trim(),
   };
 }
 
@@ -86,6 +102,13 @@ export async function setStoredAuthSession(session: StoredAuthSession) {
     authStorage.setItem(AUTH_KEY_STORAGE_KEY, normalizedSession.key),
     authStorage.setItem(AUTH_SESSION_STORAGE_KEY, normalizedSession),
   ]);
+}
+
+export async function buildUserConversationNamespace(subjectId: string, sessionPassword: string) {
+  const normalizedSubjectId = String(subjectId || "").trim() || "user";
+  const normalizedPassword = String(sessionPassword || "").trim();
+  const passwordHash = await hashText(`${normalizedSubjectId}:${normalizedPassword}`);
+  return `user:${normalizedSubjectId}:${passwordHash}`;
 }
 
 export async function setStoredAuthKey(authKey: string) {

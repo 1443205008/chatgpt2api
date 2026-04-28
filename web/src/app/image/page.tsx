@@ -130,7 +130,15 @@ function sortImageConversations(conversations: ImageConversation[]) {
   return [...conversations].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
-async function recoverConversationHistory(items: ImageConversation[]) {
+function scopedStorageKey(baseKey: string, namespace: string) {
+  return namespace ? `${baseKey}:${namespace}` : baseKey;
+}
+
+function conversationQueueKey(namespace: string, conversationId: string) {
+  return namespace ? `${namespace}:${conversationId}` : conversationId;
+}
+
+async function recoverConversationHistory(items: ImageConversation[], namespace: string) {
   const normalized = items.map((conversation) => {
     let changed = false;
 
@@ -184,13 +192,13 @@ async function recoverConversationHistory(items: ImageConversation[]) {
 
   const changedConversations = normalized.filter((conversation, index) => conversation !== items[index]);
   if (changedConversations.length > 0) {
-    await saveImageConversations(normalized);
+    await saveImageConversations(normalized, namespace);
   }
 
   return normalized;
 }
 
-function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
+function ImagePageContent({ isAdmin, conversationNamespace }: { isAdmin: boolean; conversationNamespace: string }) {
   const didLoadQuotaRef = useRef(false);
   const conversationsRef = useRef<ImageConversation[]>([]);
   const resultsViewportRef = useRef<HTMLDivElement>(null);
@@ -213,7 +221,10 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
   const [lightboxIndex, setLightboxIndex] = useState(0);
   const [deleteConfirm, setDeleteConfirm] = useState<{ type: "one"; id: string } | { type: "all" } | null>(null);
 
-  const parsedCount = useMemo(() => Math.max(1, Math.min(10, Number(imageCount) || 1)), [imageCount]);
+  const activeConversationStorageKey = scopedStorageKey(ACTIVE_CONVERSATION_STORAGE_KEY, conversationNamespace);
+  const imageSizeStorageKey = scopedStorageKey(IMAGE_SIZE_STORAGE_KEY, conversationNamespace);
+  const maxImageCount = isAdmin ? 10 : 3;
+  const parsedCount = useMemo(() => Math.max(1, Math.min(maxImageCount, Number(imageCount) || 1)), [imageCount, maxImageCount]);
   const selectedConversation = useMemo(
     () => conversations.find((item) => item.id === selectedConversationId) ?? null,
     [conversations, selectedConversationId],
@@ -243,11 +254,11 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
 
     const loadHistory = async () => {
       try {
-        const storedSize = typeof window !== "undefined" ? window.localStorage.getItem(IMAGE_SIZE_STORAGE_KEY) : null;
+        const storedSize = typeof window !== "undefined" ? window.localStorage.getItem(imageSizeStorageKey) : null;
         setImageSize(storedSize || "");
 
-        const items = await listImageConversations();
-        const normalizedItems = await recoverConversationHistory(items);
+        const items = await listImageConversations(conversationNamespace);
+        const normalizedItems = await recoverConversationHistory(items, conversationNamespace);
         if (cancelled) {
           return;
         }
@@ -255,7 +266,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         conversationsRef.current = normalizedItems;
         setConversations(normalizedItems);
         const storedConversationId =
-          typeof window !== "undefined" ? window.localStorage.getItem(ACTIVE_CONVERSATION_STORAGE_KEY) : null;
+          typeof window !== "undefined" ? window.localStorage.getItem(activeConversationStorageKey) : null;
         const nextSelectedConversationId =
           (storedConversationId && normalizedItems.some((conversation) => conversation.id === storedConversationId)
             ? storedConversationId
@@ -275,7 +286,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [activeConversationStorageKey, conversationNamespace, imageSizeStorageKey]);
 
   const loadQuota = useCallback(async () => {
     if (!isAdmin) {
@@ -329,11 +340,11 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     }
 
     if (selectedConversationId) {
-      window.localStorage.setItem(ACTIVE_CONVERSATION_STORAGE_KEY, selectedConversationId);
+      window.localStorage.setItem(activeConversationStorageKey, selectedConversationId);
     } else {
-      window.localStorage.removeItem(ACTIVE_CONVERSATION_STORAGE_KEY);
+      window.localStorage.removeItem(activeConversationStorageKey);
     }
-  }, [selectedConversationId]);
+  }, [activeConversationStorageKey, selectedConversationId]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -341,11 +352,11 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     }
 
     if (imageSize) {
-      window.localStorage.setItem(IMAGE_SIZE_STORAGE_KEY, imageSize);
+      window.localStorage.setItem(imageSizeStorageKey, imageSize);
       return;
     }
-    window.localStorage.removeItem(IMAGE_SIZE_STORAGE_KEY);
-  }, [imageSize]);
+    window.localStorage.removeItem(imageSizeStorageKey);
+  }, [imageSize, imageSizeStorageKey]);
 
   useEffect(() => {
     if (selectedConversationId && !conversations.some((conversation) => conversation.id === selectedConversationId)) {
@@ -360,7 +371,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     ]);
     conversationsRef.current = nextConversations;
     setConversations(nextConversations);
-    await saveImageConversation(conversation);
+    await saveImageConversation(conversation, conversationNamespace);
   };
 
   const updateConversation = useCallback(
@@ -378,10 +389,10 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
       conversationsRef.current = nextConversations;
       setConversations(nextConversations);
       if (options.persist !== false) {
-        await saveImageConversation(nextConversation);
+        await saveImageConversation(nextConversation, conversationNamespace);
       }
     },
-    [],
+    [conversationNamespace],
   );
 
   const clearComposerInputs = useCallback(() => {
@@ -415,11 +426,11 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     }
 
     try {
-      await deleteImageConversation(id);
+      await deleteImageConversation(id, conversationNamespace);
     } catch (error) {
       const message = error instanceof Error ? error.message : "删除会话失败";
       toast.error(message);
-      const items = await listImageConversations();
+      const items = await listImageConversations(conversationNamespace);
       conversationsRef.current = items;
       setConversations(items);
     }
@@ -427,7 +438,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
 
   const handleClearHistory = async () => {
     try {
-      await clearImageConversations();
+      await clearImageConversations(conversationNamespace);
       conversationsRef.current = [];
       setConversations([]);
       setSelectedConversationId(null);
@@ -547,7 +558,8 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
   /* eslint-disable react-hooks/preserve-manual-memoization */
   const runConversationQueue = useCallback(
     async (conversationId: string) => {
-      if (activeConversationQueueIds.has(conversationId)) {
+      const activeQueueKey = conversationQueueKey(conversationNamespace, conversationId);
+      if (activeConversationQueueIds.has(activeQueueKey)) {
         return;
       }
 
@@ -557,7 +569,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         return;
       }
 
-      activeConversationQueueIds.add(conversationId);
+      activeConversationQueueIds.add(activeQueueKey);
       await updateConversation(conversationId, (current) => {
         const conversation = current ?? snapshot;
         return {
@@ -729,10 +741,11 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         await loadQuota();
         toast.error(message);
       } finally {
-        activeConversationQueueIds.delete(conversationId);
+        activeConversationQueueIds.delete(activeQueueKey);
         for (const conversation of conversationsRef.current) {
+          const nextQueueKey = conversationQueueKey(conversationNamespace, conversation.id);
           if (
-            !activeConversationQueueIds.has(conversation.id) &&
+            !activeConversationQueueIds.has(nextQueueKey) &&
             conversation.turns.some((turn) => turn.status === "queued")
           ) {
             void runConversationQueue(conversation.id);
@@ -740,20 +753,21 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         }
       }
     },
-    [loadQuota, updateConversation],
+    [conversationNamespace, loadQuota, updateConversation],
   );
   /* eslint-enable react-hooks/preserve-manual-memoization */
 
   useEffect(() => {
     for (const conversation of conversations) {
+      const activeQueueKey = conversationQueueKey(conversationNamespace, conversation.id);
       if (
-        !activeConversationQueueIds.has(conversation.id) &&
+        !activeConversationQueueIds.has(activeQueueKey) &&
         conversation.turns.some((turn) => turn.status === "queued")
       ) {
         void runConversationQueue(conversation.id);
       }
     }
-  }, [conversations, runConversationQueue]);
+  }, [conversationNamespace, conversations, runConversationQueue]);
 
   const handleSubmit = async () => {
     const prompt = imagePrompt.trim();
@@ -764,6 +778,13 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
 
     if (imageMode === "edit" && referenceImageFiles.length === 0) {
       toast.error("请先上传参考图");
+      return;
+    }
+
+    const requestedCount = Number(imageCount) || 1;
+    if (requestedCount > maxImageCount) {
+      setImageCount(String(maxImageCount));
+      toast.error(isAdmin ? `每次最多生成 ${maxImageCount} 张图片` : "普通用户每次最多生成 3 张图片");
       return;
     }
 
@@ -909,6 +930,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
             prompt={imagePrompt}
             imageCount={imageCount}
             imageSize={imageSize}
+            maxImageCount={maxImageCount}
             availableQuota={availableQuota}
             activeTaskCount={activeTaskCount}
             referenceImages={referenceImages}
@@ -969,5 +991,10 @@ export default function ImagePage() {
     );
   }
 
-  return <ImagePageContent isAdmin={session.role === "admin"} />;
+  return (
+    <ImagePageContent
+      isAdmin={session.role === "admin"}
+      conversationNamespace={session.role === "user" ? session.conversationNamespace || "" : ""}
+    />
+  );
 }

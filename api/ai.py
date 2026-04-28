@@ -16,6 +16,8 @@ from services.protocol import (
 )
 from utils.helper import is_image_chat_request, parse_image_count
 
+USER_IMAGE_COUNT_LIMIT = 3
+
 
 class ImageGenerationRequest(BaseModel):
     prompt: str = Field(..., min_length=1)
@@ -54,9 +56,19 @@ class AnthropicMessageRequest(BaseModel):
     stream: bool | None = None
 
 
-def _chat_quota_units(payload: dict[str, object]) -> int:
+def _enforce_user_image_count(identity: dict[str, object], count: int) -> None:
+    if identity.get("role") == "user" and count > USER_IMAGE_COUNT_LIMIT:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"普通用户每次最多生成 {USER_IMAGE_COUNT_LIMIT} 张图片"},
+        )
+
+
+def _chat_quota_units(identity: dict[str, object], payload: dict[str, object]) -> int:
     if is_image_chat_request(payload):
-        return parse_image_count(payload.get("n"))
+        count = parse_image_count(payload.get("n"))
+        _enforce_user_image_count(identity, count)
+        return count
     return 1
 
 
@@ -78,6 +90,7 @@ def create_router() -> APIRouter:
             authorization: str | None = Header(default=None),
     ):
         identity = require_identity(authorization)
+        _enforce_user_image_count(identity, body.n)
         payload = body.model_dump(mode="python")
         payload["base_url"] = resolve_image_base_url(request)
         call = LoggedCall(identity, "/v1/images/generations", body.model, "文生图", quota_units=body.n)
@@ -99,6 +112,7 @@ def create_router() -> APIRouter:
         identity = require_identity(authorization)
         if n < 1 or n > 4:
             raise HTTPException(status_code=400, detail={"error": "n must be between 1 and 4"})
+        _enforce_user_image_count(identity, n)
         uploads = [*(image or []), *(image_list or [])]
         if not uploads:
             raise HTTPException(status_code=400, detail={"error": "image file is required"})
@@ -126,7 +140,7 @@ def create_router() -> APIRouter:
         identity = require_identity(authorization)
         payload = body.model_dump(mode="python")
         model = str(payload.get("model") or "auto")
-        call = LoggedCall(identity, "/v1/chat/completions", model, "文本生成", quota_units=_chat_quota_units(payload))
+        call = LoggedCall(identity, "/v1/chat/completions", model, "文本生成", quota_units=_chat_quota_units(identity, payload))
         return await call.run(openai_v1_chat_complete.handle, payload)
 
     @router.post("/v1/responses")
