@@ -14,8 +14,11 @@ export type StoredReferenceImage = {
 
 export type StoredImage = {
   id: string;
+  taskId?: string;
   status?: "loading" | "success" | "error";
   b64_json?: string;
+  url?: string;
+  revised_prompt?: string;
   error?: string;
 };
 
@@ -62,12 +65,18 @@ function imageConversationsKey(namespace?: string) {
 }
 
 function normalizeStoredImage(image: StoredImage): StoredImage {
+  const normalized = {
+    ...image,
+    taskId: typeof image.taskId === "string" && image.taskId ? image.taskId : undefined,
+    url: typeof image.url === "string" && image.url ? image.url : undefined,
+    revised_prompt: typeof image.revised_prompt === "string" ? image.revised_prompt : undefined,
+  };
   if (image.status === "loading" || image.status === "error" || image.status === "success") {
-    return image;
+    return normalized;
   }
   return {
-    ...image,
-    status: image.b64_json ? "success" : "loading",
+    ...normalized,
+    status: image.b64_json || image.url ? "success" : "loading",
   };
 }
 

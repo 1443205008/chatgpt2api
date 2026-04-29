@@ -21,6 +21,13 @@ type ImageResultsProps = {
   formatConversationTime: (value: string) => string;
 };
 
+function getStoredImageSrc(image: StoredImage) {
+  if (image.b64_json) {
+    return `data:image/png;base64,${image.b64_json}`;
+  }
+  return image.url || "";
+}
+
 export function ImageResults({
   selectedConversation,
   onOpenLightbox,
@@ -41,10 +48,10 @@ export function ImageResults({
 
   if (!selectedConversation) {
     return (
-      <div className="flex h-full min-h-[420px] items-center justify-center text-center">
+      <div className="flex h-full min-h-[260px] items-center justify-center text-center sm:min-h-[420px]">
         <div className="w-full max-w-4xl">
           <h1
-            className="text-3xl font-semibold tracking-tight text-stone-950 md:text-5xl"
+            className="text-2xl font-semibold tracking-tight text-stone-950 sm:text-3xl md:text-5xl"
             style={{
               fontFamily: '"Palatino Linotype","Book Antiqua","URW Palladio L","Times New Roman",serif',
             }}
@@ -52,7 +59,7 @@ export function ImageResults({
             Turn ideas into images
           </h1>
           <p
-            className="mt-4 text-[15px] italic tracking-[0.01em] text-stone-500"
+            className="mx-auto mt-3 max-w-[280px] text-sm italic tracking-[0.01em] text-stone-500 sm:mt-4 sm:max-w-none sm:text-[15px]"
             style={{
               fontFamily: '"Palatino Linotype","Book Antiqua","URW Palladio L","Times New Roman",serif',
             }}
@@ -65,30 +72,31 @@ export function ImageResults({
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-[980px] flex-col gap-8">
+    <div className="mx-auto flex w-full max-w-[980px] flex-col gap-5 sm:gap-8">
       {selectedConversation.turns.map((turn, turnIndex) => {
         const referenceLightboxImages = turn.referenceImages.map((image, index) => ({
           id: `${turn.id}-reference-${index}`,
           src: image.dataUrl,
         }));
-        const successfulTurnImages = turn.images.flatMap((image) =>
-          image.status === "success" && image.b64_json
+        const successfulTurnImages = turn.images.flatMap((image) => {
+          const src = image.status === "success" ? getStoredImageSrc(image) : "";
+          return src
             ? [
                 {
                   id: image.id,
-                  src: `data:image/png;base64,${image.b64_json}`,
-                  sizeLabel: formatBase64ImageSize(image.b64_json),
+                  src,
+                  sizeLabel: image.b64_json ? formatBase64ImageSize(image.b64_json) : undefined,
                   dimensions: imageDimensions[image.id],
                 },
               ]
-            : [],
-        );
+            : [];
+        });
 
         return (
-          <div key={turn.id} className="flex flex-col gap-4">
+          <div key={turn.id} className="flex flex-col gap-3 sm:gap-4">
             <div className="flex justify-end">
-              <div className="max-w-[82%] px-1 py-1 text-[15px] leading-7 text-stone-900">
-                <div className="mb-2 flex flex-wrap justify-end gap-2 text-[11px] text-stone-400">
+              <div className="max-w-[90%] px-1 py-1 text-[14px] leading-6 text-stone-900 sm:max-w-[82%] sm:text-[15px] sm:leading-7">
+                <div className="mb-1.5 flex flex-wrap justify-end gap-2 text-[11px] text-stone-400 sm:mb-2">
                   <span>第 {turnIndex + 1} 轮</span>
                   <span>
                     {turn.mode === "edit" ? "编辑图" : "文生图"}
@@ -135,7 +143,7 @@ export function ImageResults({
                   </div>
                 ) : null}
 
-                <div className="mb-4 flex flex-wrap items-center gap-2 text-xs text-stone-500">
+                <div className="mb-3 flex flex-wrap items-center gap-1.5 text-[11px] text-stone-500 sm:mb-4 sm:gap-2 sm:text-xs">
                   <span className="rounded-full bg-stone-100 px-3 py-1">{turn.count} 张</span>
                   <span className="rounded-full bg-stone-100 px-3 py-1">{getTurnStatusLabel(turn.status)}</span>
                   {turn.status === "queued" ? (
@@ -143,11 +151,12 @@ export function ImageResults({
                   ) : null}
                 </div>
 
-                <div className="columns-1 gap-4 space-y-4 sm:columns-2 xl:columns-3">
+                <div className="columns-1 gap-3 space-y-3 sm:columns-2 sm:gap-4 sm:space-y-4 xl:columns-3">
                   {turn.images.map((image, index) => {
-                    if (image.status === "success" && image.b64_json) {
+                    const imageSrc = image.status === "success" ? getStoredImageSrc(image) : "";
+                    if (image.status === "success" && imageSrc) {
                       const currentIndex = successfulTurnImages.findIndex((item) => item.id === image.id);
-                      const sizeLabel = formatBase64ImageSize(image.b64_json);
+                      const sizeLabel = image.b64_json ? formatBase64ImageSize(image.b64_json) : "";
                       const dimensions = imageDimensions[image.id];
                       const imageMeta = [sizeLabel, dimensions].filter(Boolean).join(" · ");
 
@@ -162,7 +171,7 @@ export function ImageResults({
                             className="group block w-full cursor-zoom-in"
                           >
                             <img
-                              src={`data:image/png;base64,${image.b64_json}`}
+                              src={imageSrc}
                               alt={`Generated result ${index + 1}`}
                               className="block h-auto w-full transition duration-200 group-hover:brightness-90"
                               onLoad={(event) => {
@@ -198,16 +207,16 @@ export function ImageResults({
                         <div
                           key={image.id}
                           className={cn(
-                            "break-inside-avoid overflow-hidden border border-rose-200 bg-rose-50",
-                            turn.size === "1:1" && "aspect-square",
-                            turn.size === "16:9" && "aspect-video",
-                            turn.size === "9:16" && "aspect-[9/16]",
-                            turn.size === "4:3" && "aspect-[4/3]",
-                            turn.size === "3:4" && "aspect-[3/4]",
-                            !["1:1", "16:9", "9:16", "4:3", "3:4"].includes(turn.size) && "aspect-square",
+                            "break-inside-avoid overflow-hidden rounded-2xl border border-rose-200 bg-rose-50 sm:rounded-none",
+                            turn.size === "1:1" && "sm:aspect-square",
+                            turn.size === "16:9" && "sm:aspect-video",
+                            turn.size === "9:16" && "sm:aspect-[9/16]",
+                            turn.size === "4:3" && "sm:aspect-[4/3]",
+                            turn.size === "3:4" && "sm:aspect-[3/4]",
+                            !["1:1", "16:9", "9:16", "4:3", "3:4"].includes(turn.size) && "sm:aspect-square",
                           )}
                         >
-                          <div className="flex h-full items-center justify-center px-6 py-8 text-center text-sm leading-6 text-rose-600">
+                          <div className="flex h-full min-h-16 items-center justify-center px-4 py-4 text-center text-sm leading-6 text-rose-600 sm:px-6 sm:py-8">
                             {image.error || "生成失败"}
                           </div>
                         </div>

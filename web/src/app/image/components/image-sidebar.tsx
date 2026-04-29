@@ -49,7 +49,12 @@ export function ImageSidebar({
           </div>
         )}
 
-        <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1 [scrollbar-color:rgba(120,113,108,.45)_transparent] [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-stone-400/45 [&::-webkit-scrollbar-track]:bg-transparent">
+        <div
+          className={cn(
+            "min-h-0 flex-1 overflow-y-auto [scrollbar-color:rgba(120,113,108,.45)_transparent] [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-stone-400/45 [&::-webkit-scrollbar-track]:bg-transparent",
+            hideActionButtons ? "space-y-1 pr-0" : "space-y-2 pr-1",
+          )}
+        >
           {isLoadingHistory ? (
             <div className="flex items-center gap-2 px-2 py-3 text-sm text-stone-500">
               <LoaderCircle className="size-4 animate-spin" />
@@ -62,21 +67,22 @@ export function ImageSidebar({
               const active = conversation.id === selectedConversationId;
               const stats = getImageConversationStats(conversation);
               return (
-                  <div
-                    key={conversation.id}
-                    className={cn(
-                      "group relative w-full border-l-2 px-3 py-2 text-left transition sm:py-3",
+                <div
+                  key={conversation.id}
+                  className={cn(
+                    "group relative w-full border-l-2 text-left transition",
+                    hideActionButtons ? "px-4 py-3.5" : "px-3 py-2 sm:py-3",
                     active
-                      ? "border-stone-900 bg-black/[0.03] text-stone-950"
+                      ? "border-stone-900 bg-black/[0.035] text-stone-950"
                       : "border-transparent text-stone-700 hover:border-stone-300 hover:bg-white/40",
                   )}
                 >
                   <button
                     type="button"
                     onClick={() => onSelectConversation(conversation.id)}
-                    className="block w-full pr-8 text-left"
+                    className={cn("block w-full text-left", hideActionButtons ? "pr-0" : "pr-8")}
                   >
-                    <div className="truncate text-sm font-semibold">
+                    <div className={cn("truncate font-semibold", hideActionButtons ? "text-base" : "text-sm")}>
                       <span className="truncate">{conversation.title}</span>
                     </div>
                     <div className={cn("mt-1 text-xs", active ? "text-stone-500" : "text-stone-400")}>
@@ -93,14 +99,16 @@ export function ImageSidebar({
                       </div>
                     ) : null}
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => void onDeleteConversation(conversation.id)}
-                    className="absolute top-3 right-2 inline-flex size-7 items-center justify-center rounded-md text-stone-400 opacity-0 transition hover:bg-stone-100 hover:text-rose-500 group-hover:opacity-100"
-                    aria-label="删除会话"
-                  >
-                    <Trash2 className="size-4" />
-                  </button>
+                  {!hideActionButtons ? (
+                    <button
+                      type="button"
+                      onClick={() => void onDeleteConversation(conversation.id)}
+                      className="absolute top-3 right-2 inline-flex size-7 items-center justify-center rounded-md text-stone-400 opacity-0 transition hover:bg-stone-100 hover:text-rose-500 group-hover:opacity-100"
+                      aria-label="删除会话"
+                    >
+                      <Trash2 className="size-4" />
+                    </button>
+                  ) : null}
                 </div>
               );
             })

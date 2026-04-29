@@ -79,7 +79,24 @@ export type SystemLog = {
 
 export type ImageResponse = {
   created: number;
-  data: Array<{ b64_json: string; revised_prompt?: string }>;
+  data: Array<{ b64_json?: string; url?: string; revised_prompt?: string }>;
+};
+
+export type ImageTask = {
+  id: string;
+  status: "queued" | "running" | "success" | "error";
+  mode: "generate" | "edit";
+  model?: ImageModel;
+  size?: string;
+  created_at: string;
+  updated_at: string;
+  data?: Array<{ b64_json?: string; url?: string; revised_prompt?: string }>;
+  error?: string;
+};
+
+type ImageTaskListResponse = {
+  items: ImageTask[];
+  missing_ids: string[];
 };
 
 export type LoginResponse = {
@@ -240,6 +257,54 @@ export async function editImage(files: File | File[], prompt: string, model?: Im
       body: formData,
     },
   );
+}
+
+export async function createImageGenerationTask(clientTaskId: string, prompt: string, model?: ImageModel, size?: string) {
+  return httpRequest<ImageTask>("/api/image-tasks/generations", {
+    method: "POST",
+    body: {
+      client_task_id: clientTaskId,
+      prompt,
+      ...(model ? { model } : {}),
+      ...(size ? { size } : {}),
+    },
+  });
+}
+
+export async function createImageEditTask(
+  clientTaskId: string,
+  files: File | File[],
+  prompt: string,
+  model?: ImageModel,
+  size?: string,
+) {
+  const formData = new FormData();
+  const uploadFiles = Array.isArray(files) ? files : [files];
+
+  uploadFiles.forEach((file) => {
+    formData.append("image", file);
+  });
+  formData.append("client_task_id", clientTaskId);
+  formData.append("prompt", prompt);
+  if (model) {
+    formData.append("model", model);
+  }
+  if (size) {
+    formData.append("size", size);
+  }
+
+  return httpRequest<ImageTask>("/api/image-tasks/edits", {
+    method: "POST",
+    body: formData,
+  });
+}
+
+export async function fetchImageTasks(ids: string[]) {
+  const params = new URLSearchParams();
+  if (ids.length > 0) {
+    params.set("ids", ids.join(","));
+  }
+  return httpRequest<ImageTaskListResponse>(`/api/image-tasks${params.toString() ? `?${params.toString()}` : ""}`);
 }
 
 export async function fetchSettingsConfig() {
