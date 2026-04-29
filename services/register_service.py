@@ -20,6 +20,19 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _normalize_proxy_text(value: object) -> str:
+    items = str(value or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    proxies: list[str] = []
+    seen = set()
+    for item in items:
+        proxy = item.strip()
+        if not proxy or proxy in seen:
+            continue
+        seen.add(proxy)
+        proxies.append(proxy)
+    return "\n".join(proxies)
+
+
 def _default_config() -> dict:
     return {**openai_register.config, "mode": "total", "target_quota": 100, "target_available": 10, "check_interval": 5, "enabled": False, "stats": {"success": 0, "fail": 0, "done": 0, "running": 0, "threads": openai_register.config["threads"], "elapsed_seconds": 0, "avg_seconds": 0, "success_rate": 0, "current_quota": 0, "current_available": 0}}
 
@@ -33,7 +46,7 @@ def _normalize(raw: dict) -> dict:
     cfg["target_quota"] = max(1, int(cfg.get("target_quota") or 1))
     cfg["target_available"] = max(1, int(cfg.get("target_available") or 1))
     cfg["check_interval"] = max(1, int(cfg.get("check_interval") or 5))
-    cfg["proxy"] = str(cfg.get("proxy") or "").strip()
+    cfg["proxy"] = _normalize_proxy_text(cfg.get("proxy"))
     cfg["enabled"] = bool(cfg.get("enabled"))
     stats = {**_default_config()["stats"], **(raw.get("stats") if isinstance(raw.get("stats"), dict) else {}),
              "threads": cfg["threads"]}

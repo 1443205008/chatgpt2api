@@ -95,9 +95,16 @@ export function RegisterCard() {
               <label className="text-sm text-stone-700">线程数</label>
               <Input value={String(config.threads)} onChange={(event) => setThreads(event.target.value)} className="h-10 rounded-xl border-stone-200 bg-white" disabled={config.enabled} />
             </div>
-            <div className="space-y-2">
+            <div className="space-y-2 md:col-span-3">
               <label className="text-sm text-stone-700">注册代理</label>
-              <Input value={config.proxy} onChange={(event) => setProxy(event.target.value)} placeholder="http://127.0.0.1:7890" className="h-10 rounded-xl border-stone-200 bg-white" disabled={config.enabled} />
+              <Textarea
+                value={config.proxy}
+                onChange={(event) => setProxy(event.target.value)}
+                placeholder={"http://127.0.0.1:7890\nsocks5://127.0.0.1:7891"}
+                className="min-h-20 rounded-xl border-stone-200 bg-white font-mono text-xs"
+                disabled={config.enabled}
+              />
+              <p className="text-xs text-stone-500">一行一个代理。注册任务启动时，每个任务会随机选择其中一个代理；留空则直连。</p>
             </div>
             <div className="space-y-2">
               <label className="text-sm text-stone-700">目标剩余额度</label>

@@ -66,12 +66,15 @@ export function TopNav() {
     <header className="border-b border-stone-100/50">
       <div className="flex min-h-12 flex-col gap-1 px-3 py-2 sm:h-12 sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:px-6 sm:py-0">
         <div className="flex items-center justify-between gap-2 sm:justify-start sm:gap-3">
-          <Link
-            href="/image"
+          <a
+            href="https://codex.0u0o.com"
+            target="_blank"
+            rel="noreferrer"
             className="shrink-0 py-1 text-[15px] font-bold tracking-tight text-stone-950 transition hover:text-stone-700"
+            aria-label="codex 中转站赞助"
           >
-            chatgpt2api
-          </Link>
+            codex 中转站赞助
+          </a>
           <a
             href="https://github.com/basketikun/chatgpt2api"
             target="_blank"

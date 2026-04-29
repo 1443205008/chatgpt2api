@@ -296,6 +296,43 @@ def create_session(proxy: str = "") -> requests.Session:
     return session
 
 
+def _proxy_pool(value: object = None) -> list[str]:
+    raw = config.get("proxy") if value is None else value
+    if isinstance(raw, list):
+        items = raw
+    else:
+        items = str(raw or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    proxies: list[str] = []
+    seen = set()
+    for item in items:
+        proxy = str(item or "").strip()
+        if not proxy or proxy in seen:
+            continue
+        seen.add(proxy)
+        proxies.append(proxy)
+    return proxies
+
+
+def choose_proxy() -> str:
+    proxies = _proxy_pool()
+    return random.choice(proxies) if proxies else ""
+
+
+def _proxy_label(proxy: str) -> str:
+    proxy = str(proxy or "").strip()
+    if not proxy:
+        return "直连"
+    try:
+        parsed = urlparse(proxy)
+        if parsed.username or parsed.password:
+            host = parsed.hostname or ""
+            port = f":{parsed.port}" if parsed.port else ""
+            return f"{parsed.scheme}://***:***@{host}{port}"
+    except Exception:
+        pass
+    return proxy
+
+
 def request_with_local_retry(session: requests.Session, method: str, url: str, retry_attempts: int = 3, **kwargs):
     last_error = ""
     for _ in range(max(1, retry_attempts)):
@@ -385,26 +422,30 @@ def extract_oauth_callback_params_from_consent_session(session: requests.Session
     return extract_oauth_callback_params_from_url(str(org_resp.headers.get("Location") or "").strip())
 
 
-def exchange_platform_tokens(session: requests.Session, device_id: str, code_verifier: str, consent_url: str) -> dict | None:
+def exchange_platform_tokens(session: requests.Session, device_id: str, code_verifier: str, consent_url: str, proxy: str = "") -> dict | None:
     callback_params = extract_oauth_callback_params_from_consent_session(session, consent_url, device_id)
     if not callback_params:
         return None
     code = str(callback_params.get("code") or "").strip()
     if not code:
         return None
-    resp = create_session(config["proxy"]).post(
-        f"{auth_base}/oauth/token",
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-        data={
-            "grant_type": "authorization_code",
-            "code": code,
-            "redirect_uri": platform_oauth_redirect_uri,
-            "client_id": platform_oauth_client_id,
-            "code_verifier": code_verifier,
-        },
-        verify=False,
-        timeout=60,
-    )
+    token_session = create_session(proxy)
+    try:
+        resp = token_session.post(
+            f"{auth_base}/oauth/token",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": platform_oauth_redirect_uri,
+                "client_id": platform_oauth_client_id,
+                "code_verifier": code_verifier,
+            },
+            verify=False,
+            timeout=60,
+        )
+    finally:
+        token_session.close()
     data = _response_json(resp)
     if resp.status_code != 200 or not data.get("access_token") or not data.get("refresh_token") or not data.get("id_token"):
         return None
@@ -419,6 +460,7 @@ def exchange_platform_tokens(session: requests.Session, device_id: str, code_ver
 
 class PlatformRegistrar:
     def __init__(self, proxy: str = "") -> None:
+        self.proxy = str(proxy or "").strip()
         self.session = create_session(proxy)
         self.device_id = str(uuid.uuid4())
 
@@ -558,7 +600,7 @@ class PlatformRegistrar:
             step(index, "独立登录验证码校验完成")
         if not continue_url:
             continue_url = f"{auth_base}/sign-in-with-chatgpt/codex/consent"
-        tokens = exchange_platform_tokens(self.session, self.device_id, code_verifier, continue_url)
+        tokens = exchange_platform_tokens(self.session, self.device_id, code_verifier, continue_url, self.proxy)
         if not tokens:
             raise RuntimeError("token换取失败")
         step(index, "token 换取完成")
@@ -596,9 +638,10 @@ class PlatformRegistrar:
 
 def worker(index: int) -> dict:
     start = time.time()
-    registrar = PlatformRegistrar(config["proxy"])
+    proxy = choose_proxy()
+    registrar = PlatformRegistrar(proxy)
     try:
-        step(index, "任务启动")
+        step(index, f"任务启动，代理={_proxy_label(proxy)}")
         result = registrar.register(index)
         cost = time.time() - start
         access_token = str(result["access_token"])
