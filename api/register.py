@@ -16,6 +16,7 @@ class RegisterConfigRequest(BaseModel):
     proxy: str | None = None
     total: int | None = None
     threads: int | None = None
+    manual_password: str | None = None
     mode: str | None = None
     target_quota: int | None = None
     target_available: int | None = None

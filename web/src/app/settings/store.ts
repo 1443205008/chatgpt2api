@@ -189,6 +189,7 @@ type SettingsStore = {
   setRegisterProxy: (value: string) => void;
   setRegisterTotal: (value: string) => void;
   setRegisterThreads: (value: string) => void;
+  setRegisterManualPassword: (value: string) => void;
   setRegisterMode: (value: "total" | "quota" | "available") => void;
   setRegisterTargetQuota: (value: string) => void;
   setRegisterTargetAvailable: (value: string) => void;
@@ -558,6 +559,10 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     set((state) => state.registerConfig ? { registerConfig: { ...state.registerConfig, threads: Number(value) || 0 } } : {});
   },
 
+  setRegisterManualPassword: (value) => {
+    set((state) => state.registerConfig ? { registerConfig: { ...state.registerConfig, manual_password: value } } : {});
+  },
+
   setRegisterMode: (value) => {
     set((state) => state.registerConfig ? { registerConfig: { ...state.registerConfig, mode: value } } : {});
   },
@@ -629,6 +634,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         proxy: registerConfig.proxy.trim(),
         total: Math.max(1, Number(registerConfig.total) || 1),
         threads: Math.max(1, Number(registerConfig.threads) || 1),
+        manual_password: String(registerConfig.manual_password || "").trim(),
         mode: registerConfig.mode,
         target_quota: Math.max(1, Number(registerConfig.target_quota) || 1),
         target_available: Math.max(1, Number(registerConfig.target_available) || 1),
@@ -654,6 +660,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
           proxy: registerConfig.proxy.trim(),
           total: Math.max(1, Number(registerConfig.total) || 1),
           threads: Math.max(1, Number(registerConfig.threads) || 1),
+          manual_password: String(registerConfig.manual_password || "").trim(),
           mode: registerConfig.mode,
           target_quota: Math.max(1, Number(registerConfig.target_quota) || 1),
           target_available: Math.max(1, Number(registerConfig.target_available) || 1),

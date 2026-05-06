@@ -35,11 +35,12 @@ config = {
     "proxy": "",
     "total": 10,
     "threads": 3,
+    "manual_password": "",
 }
 register_config_file = base_dir.parents[1] / "data" / "register.json"
 try:
     saved_config = json.loads(register_config_file.read_text(encoding="utf-8"))
-    config.update({key: saved_config[key] for key in ("mail", "proxy", "total", "threads") if key in saved_config})
+    config.update({key: saved_config[key] for key in ("mail", "proxy", "total", "threads", "manual_password") if key in saved_config})
 except Exception:
     pass
 
@@ -186,6 +187,10 @@ def create_mailbox(username: str | None = None) -> dict:
 
 def wait_for_code(mailbox: dict) -> str | None:
     return mail_provider.wait_for_code(config["mail"], mailbox)
+
+
+def _manual_password() -> str:
+    return str(config.get("manual_password") or "").strip()
 
 
 class SentinelTokenGenerator:
@@ -580,7 +585,7 @@ class PlatformRegistrar:
         if not email:
             raise RuntimeError("邮箱服务未返回 address")
         step(index, f"邮箱创建完成: {email}")
-        password = _random_password()
+        password = _manual_password() or _random_password()
         first_name, last_name = _random_name()
         self._platform_authorize(email, index)
         self._register_user(email, password, index)

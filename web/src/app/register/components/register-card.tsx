@@ -18,6 +18,7 @@ export function RegisterCard() {
   const setProxy = useSettingsStore((state) => state.setRegisterProxy);
   const setTotal = useSettingsStore((state) => state.setRegisterTotal);
   const setThreads = useSettingsStore((state) => state.setRegisterThreads);
+  const setManualPassword = useSettingsStore((state) => state.setRegisterManualPassword);
   const setMode = useSettingsStore((state) => state.setRegisterMode);
   const setTargetQuota = useSettingsStore((state) => state.setRegisterTargetQuota);
   const setTargetAvailable = useSettingsStore((state) => state.setRegisterTargetAvailable);
@@ -100,6 +101,10 @@ export function RegisterCard() {
             <div className="space-y-2">
               <label className="text-sm text-stone-700">注册代理</label>
               <Input value={config.proxy} onChange={(event) => setProxy(event.target.value)} placeholder="http://127.0.0.1:7890" className="h-10 rounded-xl border-stone-200 bg-white" disabled={config.enabled} />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm text-stone-700">手动密码</label>
+              <Input type="password" value={String(config.manual_password || "")} onChange={(event) => setManualPassword(event.target.value)} placeholder="留空自动随机密码" className="h-10 rounded-xl border-stone-200 bg-white" disabled={config.enabled} />
             </div>
             <div className="space-y-2">
               <label className="text-sm text-stone-700">目标剩余额度</label>

@@ -211,6 +211,7 @@ export type RegisterConfig = {
   proxy: string;
   total: number;
   threads: number;
+  manual_password?: string;
   mode: "total" | "quota" | "available";
   target_quota: number;
   target_available: number;

@@ -160,6 +160,39 @@ function downloadTokens(accounts: Account[]) {
   URL.revokeObjectURL(url);
 }
 
+async function copyText(value: string) {
+  try {
+    if (navigator.clipboard?.writeText && window.isSecureContext) {
+      await navigator.clipboard.writeText(value);
+      return;
+    }
+  } catch {
+    // Fall through to the legacy copy path below.
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.top = "0";
+  textarea.style.left = "0";
+  textarea.style.width = "1px";
+  textarea.style.height = "1px";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  textarea.setSelectionRange(0, value.length);
+
+  try {
+    if (!document.execCommand("copy")) {
+      throw new Error("copy command failed");
+    }
+  } finally {
+    textarea.remove();
+  }
+}
+
 function displayAccountType(account: Account) {
   return account.type || "Free";
 }
@@ -346,6 +379,16 @@ function AccountsPageContent() {
       return;
     }
     setSelectedIds((prev) => prev.filter((id) => !currentRows.some((row) => row.access_token === id)));
+  };
+
+  const handleCopyToken = async (token: string) => {
+    try {
+      await copyText(token);
+      toast.success("token 已复制");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "复制失败";
+      toast.error(`复制失败：${message}`);
+    }
   };
 
   return (
@@ -639,10 +682,9 @@ function AccountsPageContent() {
                             <button
                               type="button"
                               className="rounded-lg p-1 text-stone-400 transition hover:bg-stone-100 hover:text-stone-700"
-                              onClick={() => {
-                                void navigator.clipboard.writeText(account.access_token);
-                                toast.success("token 已复制");
-                              }}
+                              onClick={() => void handleCopyToken(account.access_token)}
+                              aria-label="复制 token"
+                              title="复制 token"
                             >
                               <Copy className="size-4" />
                             </button>
