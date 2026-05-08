@@ -55,7 +55,7 @@ export function RegisterCard() {
       ...(type === "duckmail" ? { api_key: "", default_domain: "duckmail.sbs" } : {}),
       ...(type === "gptmail" ? { api_key: "", default_domain: "" } : {}),
       ...(type === "yyds_mail" ? { api_base: "https://maliapi.215.im/v1", api_key: "", domain: [], subdomain: "", wildcard: false } : {}),
-      ...(type === "luckyous" ? { api_base: "https://mails.luckyous.com", api_key: "", api_secret: "", domain: ["outlook.com"], aliases_per_email: 5, alias_prefix: "oa", project_code: "", email_type: "" } : {}),
+      ...(type === "luckyous" ? { api_base: "https://mails.luckyous.com", api_key: "", domain: ["outlook.com"], aliases_per_email: 5, alias_prefix: "oa", page_size: 100, project_id: "", tag_id: "", keyword: "", user_disabled: 0 } : {}),
     });
   };
 
@@ -200,20 +200,28 @@ export function RegisterCard() {
                       {type === "luckyous" ? (
                         <>
                           <div className="space-y-2">
-                            <label className="text-sm text-stone-700">API Secret</label>
-                            <Input type="password" value={String(provider.api_secret || "")} onChange={(event) => updateProvider(index, { api_secret: event.target.value })} className="h-10 rounded-xl border-stone-200 bg-white" disabled={config.enabled} />
+                            <label className="text-sm text-stone-700">Project ID</label>
+                            <Input value={String(provider.project_id || "")} onChange={(event) => updateProvider(index, { project_id: event.target.value })} placeholder="可选" className="h-10 rounded-xl border-stone-200 bg-white" disabled={config.enabled} />
                           </div>
                           <div className="space-y-2">
-                            <label className="text-sm text-stone-700">Project Code</label>
-                            <Input value={String(provider.project_code || "")} onChange={(event) => updateProvider(index, { project_code: event.target.value })} placeholder="可选" className="h-10 rounded-xl border-stone-200 bg-white" disabled={config.enabled} />
+                            <label className="text-sm text-stone-700">Tag ID</label>
+                            <Input value={String(provider.tag_id || "")} onChange={(event) => updateProvider(index, { tag_id: event.target.value })} placeholder="可选，0 表示未设置标签" className="h-10 rounded-xl border-stone-200 bg-white" disabled={config.enabled} />
                           </div>
                           <div className="space-y-2">
-                            <label className="text-sm text-stone-700">Email Type</label>
-                            <Input value={String(provider.email_type || "")} onChange={(event) => updateProvider(index, { email_type: event.target.value })} placeholder="可选，例如 ms_graph" className="h-10 rounded-xl border-stone-200 bg-white" disabled={config.enabled} />
+                            <label className="text-sm text-stone-700">Keyword</label>
+                            <Input value={String(provider.keyword || "")} onChange={(event) => updateProvider(index, { keyword: event.target.value })} placeholder="可选，服务端邮箱关键词" className="h-10 rounded-xl border-stone-200 bg-white" disabled={config.enabled} />
                           </div>
                           <div className="space-y-2">
                             <label className="text-sm text-stone-700">单邮箱别名数量</label>
                             <Input value={String(provider.aliases_per_email || 5)} onChange={(event) => updateProvider(index, { aliases_per_email: Number(event.target.value) || 5 })} className="h-10 rounded-xl border-stone-200 bg-white" disabled={config.enabled} />
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-sm text-stone-700">别名前缀</label>
+                            <Input value={String(provider.alias_prefix || "oa")} onChange={(event) => updateProvider(index, { alias_prefix: event.target.value })} placeholder="oa" className="h-10 rounded-xl border-stone-200 bg-white" disabled={config.enabled} />
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-sm text-stone-700">分页大小</label>
+                            <Input value={String(provider.page_size || 100)} onChange={(event) => updateProvider(index, { page_size: Number(event.target.value) || 100 })} placeholder="100" className="h-10 rounded-xl border-stone-200 bg-white" disabled={config.enabled} />
                           </div>
                         </>
                       ) : null}

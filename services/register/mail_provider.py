@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import json
 import random
 import re
@@ -12,6 +11,7 @@ from email import message_from_string, policy
 from email.utils import parsedate_to_datetime
 from threading import Lock
 from typing import Any, Callable, TypeVar
+from urllib.parse import quote
 
 import requests
 from curl_cffi import requests as curl_requests
@@ -642,12 +642,14 @@ class LuckyousMailProvider(BaseMailProvider):
 
     def __init__(self, entry: dict, conf: dict):
         super().__init__(conf, str(entry.get("provider_ref") or ""))
-        self.conf = {**conf, "wait_interval": max(float(conf.get("wait_interval") or 2), 6.0)}
+        self.conf = {**conf, "wait_interval": max(float(conf.get("wait_interval") or 2), 3.0)}
         self.api_base = str(entry.get("api_base") or "https://mails.luckyous.com").rstrip("/")
         self.api_key = str(entry.get("api_key") or "").strip()
-        self.api_secret = str(entry.get("api_secret") or "").strip()
-        self.project_code = str(entry.get("project_code") or "").strip()
-        self.email_type = str(entry.get("email_type") or "").strip()
+        self.project_id = str(entry.get("project_id") or "").strip()
+        self.tag_id = str(entry.get("tag_id") or "").strip()
+        self.keyword = str(entry.get("keyword") or "").strip()
+        user_disabled = entry.get("user_disabled", 0)
+        self.user_disabled = None if str(user_disabled).strip() == "" else int(user_disabled)
         raw_domains = entry.get("domain") or ["outlook.com"]
         if isinstance(raw_domains, list):
             self.domains = [str(item).strip().lower().lstrip("@") for item in raw_domains if str(item).strip()]
@@ -656,28 +658,21 @@ class LuckyousMailProvider(BaseMailProvider):
         self.domains = self.domains or ["outlook.com"]
         self.aliases_per_email = max(1, int(entry.get("aliases_per_email") or 5))
         self.alias_prefix = str(entry.get("alias_prefix") or "oa").strip() or "oa"
-        self.page_size = max(1, min(100, int(entry.get("page_size") or 100)))
+        self.page_size = max(1, min(500, int(entry.get("page_size") or 100)))
         self.session = requests.Session()
         self.session.trust_env = False
         self.session.headers.update({"User-Agent": conf["user_agent"], "Accept": "application/json"})
 
-    def _signed_headers(self, method: str, path: str, body: str) -> dict[str, str]:
-        if not self.api_key or not self.api_secret:
-            raise RuntimeError("Luckyous 需要配置 API Key 和 API Secret")
-        timestamp = str(int(time.time()))
-        payload = f"{method.upper()}{path}{timestamp}{body}"
-        signature = hmac.new(self.api_secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
-        return {
-            "X-API-Key": self.api_key,
-            "X-Timestamp": timestamp,
-            "X-Signature": signature,
-            "Content-Type": "application/json",
-        }
+    def _openapi_headers(self) -> dict[str, str]:
+        if not self.api_key:
+            raise RuntimeError("Luckyous 需要配置 API Key")
+        if self.api_key.lower().startswith("bearer "):
+            return {"Authorization": self.api_key, "Content-Type": "application/json"}
+        return {"X-API-Key": self.api_key, "Content-Type": "application/json"}
 
     def _openapi_request(self, method: str, path: str, params: dict[str, Any] | None = None, payload: dict[str, Any] | None = None, expected: tuple[int, ...] = (200,)) -> Any:
         query = {key: value for key, value in (params or {}).items() if value not in (None, "")}
-        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")) if payload is not None else ""
-        resp = self.session.request(method.upper(), f"{self.api_base}{path}", params=query, data=body or None, headers=self._signed_headers(method, path, body), timeout=self.conf["request_timeout"], verify=False)
+        resp = self.session.request(method.upper(), f"{self.api_base}{path}", params=query, json=payload, headers=self._openapi_headers(), timeout=self.conf["request_timeout"], verify=False)
         if resp.status_code not in expected:
             raise RuntimeError(f"Luckyous OpenAPI 请求失败: {method} {path}, HTTP {resp.status_code}, body={resp.text[:300]}")
         data = resp.json()
@@ -687,7 +682,7 @@ class LuckyousMailProvider(BaseMailProvider):
 
     @staticmethod
     def _query_token(path: str) -> str:
-        marker = "/api/v1/email/query/"
+        marker = "/api/v1/openapi/email/token/"
         if marker not in path:
             return ""
         return path.split(marker, 1)[1].split("/", 1)[0]
@@ -700,20 +695,20 @@ class LuckyousMailProvider(BaseMailProvider):
             with luckyous_lock:
                 now = time.monotonic()
                 last = luckyous_token_query_at.get(token, 0.0)
-                wait_seconds = 6.0 - (now - last)
+                wait_seconds = 3.0 - (now - last)
                 if wait_seconds <= 0:
                     luckyous_token_query_at[token] = now
                     return
             time.sleep(wait_seconds)
 
-    def _query_request(self, path: str, expected: tuple[int, ...] = (200,)) -> Any:
+    def _token_request(self, path: str, expected: tuple[int, ...] = (200,)) -> Any:
         self._throttle_query(path)
         resp = self.session.get(f"{self.api_base}{path}", timeout=self.conf["request_timeout"], verify=False)
         if resp.status_code not in expected:
-            raise RuntimeError(f"Luckyous 查询请求失败: GET {path}, HTTP {resp.status_code}, body={resp.text[:300]}")
+            raise RuntimeError(f"Luckyous Token 查询请求失败: GET {path}, HTTP {resp.status_code}, body={resp.text[:300]}")
         data = resp.json()
         if isinstance(data, dict) and int(data.get("code", 0) or 0) != 0:
-            raise RuntimeError(f"Luckyous 查询返回错误: {data.get('message') or data.get('msg') or data.get('code')}")
+            raise RuntimeError(f"Luckyous Token 查询返回错误: {data.get('message') or data.get('msg') or data.get('code')}")
         return data.get("data") if isinstance(data, dict) and "data" in data else data
 
     @staticmethod
@@ -741,7 +736,7 @@ class LuckyousMailProvider(BaseMailProvider):
         return len(items) >= page_size
 
     def _list_purchases(self) -> list[dict[str, str]]:
-        cache_key = f"{self.api_base}:{self.api_key}:{self.project_code}:{self.email_type}:{','.join(self.domains)}:{self.page_size}"
+        cache_key = f"{self.api_base}:{self.api_key}:{self.project_id}:{self.tag_id}:{self.keyword}:{self.user_disabled}:{','.join(self.domains)}:{self.page_size}"
         with luckyous_lock:
             cached = luckyous_purchases_cache.get(cache_key)
             if cached and time.monotonic() - cached[0] < 60:
@@ -749,21 +744,28 @@ class LuckyousMailProvider(BaseMailProvider):
 
         purchases: list[dict[str, str]] = []
         seen_emails: set[str] = set()
-        for page in range(1, 101):
+        for page in range(1, 1001):
             params: dict[str, Any] = {"page": page, "page_size": self.page_size}
-            if self.project_code:
-                params["project_code"] = self.project_code
-            if self.email_type:
-                params["email_type"] = self.email_type
+            if self.project_id:
+                params["project_id"] = self.project_id
+            if self.tag_id:
+                params["tag_id"] = self.tag_id
+            if self.keyword:
+                params["keyword"] = self.keyword
+            if self.user_disabled is not None:
+                params["user_disabled"] = self.user_disabled
             data = self._openapi_request("GET", "/api/v1/openapi/email/purchases", params=params)
             items = self._items(data)
             for item in items:
                 email = str(item.get("email_address") or item.get("email") or item.get("address") or "").strip().lower()
                 token = str(item.get("token") or item.get("query_token") or "").strip()
                 status = str(item.get("status") or "").strip().lower()
+                disabled = str(item.get("user_disabled") or "0").strip()
                 if not email or not token:
                     continue
-                if status and status in {"disabled", "expired", "invalid", "failed", "deleted"}:
+                if disabled not in {"", "0", "false", "False"}:
+                    continue
+                if status and status in {"2", "4", "disabled", "expired", "invalid", "failed", "deleted", "abnormal"}:
                     continue
                 if not any(email.endswith(f"@{domain}") for domain in self.domains):
                     continue
@@ -789,7 +791,7 @@ class LuckyousMailProvider(BaseMailProvider):
     def create_mailbox(self, username: str | None = None) -> dict[str, Any]:
         purchases = self._list_purchases()
         state_key = hashlib.sha256(
-            f"{self.api_base}:{self.api_key}:{self.project_code}:{self.email_type}:{','.join(self.domains)}:{self.aliases_per_email}:{self.alias_prefix}".encode("utf-8"),
+            f"{self.api_base}:{self.api_key}:{self.project_id}:{self.tag_id}:{self.keyword}:{self.user_disabled}:{','.join(self.domains)}:{self.aliases_per_email}:{self.alias_prefix}".encode("utf-8"),
         ).hexdigest()
         with luckyous_lock:
             state = _load_luckyous_alias_state()
@@ -817,29 +819,35 @@ class LuckyousMailProvider(BaseMailProvider):
             "address": address,
             "base_address": purchase["email"],
             "token": purchase["token"],
+            "created_at": datetime.now(timezone.utc).isoformat(),
         }
 
-    def _message_from_item(self, mailbox: dict[str, Any], item: dict[str, Any], detail: dict[str, Any] | None = None) -> dict[str, Any] | None:
-        detail = detail if isinstance(detail, dict) else {}
-        raw = {**item, **detail}
-        message_id = str(raw.get("message_id") or raw.get("id") or raw.get("uid") or "").strip()
-        code = str(raw.get("verification_code") or raw.get("code") or "").strip()
-        text_content, html_content = _extract_content(raw)
-        if code and code not in text_content:
+    def _message_from_code_response(self, mailbox: dict[str, Any], data: Any) -> dict[str, Any] | None:
+        if not isinstance(data, dict):
+            return None
+        if data.get("has_new_mail") is False:
+            return None
+        mail = data.get("mail") if isinstance(data.get("mail"), dict) else {}
+        code = str(data.get("verification_code") or "").strip()
+        if not code and not mail:
+            return None
+        raw = {**data, "mail": mail}
+        message_id = str(mail.get("message_id") or "").strip()
+        text_content = str(mail.get("body_text") or "")
+        html_content = str(mail.get("body_html") or "")
+        if code and code not in f"{text_content}\n{html_content}":
             text_content = f"Verification code: {code}\n{text_content}".strip()
-        sender = raw.get("from") or raw.get("sender") or raw.get("from_address") or ""
-        if isinstance(sender, dict):
-            sender = sender.get("address") or sender.get("email") or sender.get("name") or ""
+        raw_json = json.dumps(raw, ensure_ascii=False, sort_keys=True, default=str)
         return {
             "provider": self.name,
             "mailbox": mailbox["address"],
-            "message_id": message_id or hashlib.sha256(json.dumps(raw, ensure_ascii=False, sort_keys=True).encode("utf-8", errors="replace")).hexdigest(),
-            "subject": str(raw.get("subject") or ""),
-            "sender": str(sender),
+            "message_id": message_id or hashlib.sha256(raw_json.encode("utf-8", errors="replace")).hexdigest(),
+            "subject": str(mail.get("subject") or ""),
+            "sender": str(mail.get("from") or ""),
             "text_content": text_content,
             "html_content": html_content,
-            "received_at": _parse_received_at(raw.get("received_at") or raw.get("receivedAt") or raw.get("date") or raw.get("timestamp") or raw.get("created_at") or raw.get("createdAt")),
-            "to": raw.get("to") or raw.get("mailTo") or raw.get("receiver") or raw.get("receivers"),
+            "received_at": _parse_received_at(mail.get("received_at")),
+            "to": [mailbox.get("address"), mailbox.get("base_address") or data.get("email_address")],
             "raw": raw,
         }
 
@@ -847,34 +855,8 @@ class LuckyousMailProvider(BaseMailProvider):
         token = str(mailbox.get("token") or "").strip()
         if not token:
             raise RuntimeError("Luckyous 缺少 token")
-        data = self._query_request(f"/api/v1/email/query/{token}")
-        items = self._items(data)
-        candidates = [item for item in items if isinstance(item, dict)]
-        candidates.sort(
-            key=lambda value: (
-                (_parse_received_at(value.get("received_at") or value.get("receivedAt") or value.get("date") or value.get("timestamp") or value.get("created_at") or value.get("createdAt")) or datetime.fromtimestamp(0, tz=timezone.utc)).timestamp(),
-                str(value.get("message_id") or value.get("id") or ""),
-            ),
-            reverse=True,
-        )
-        fallback: dict[str, Any] | None = None
-        for item in candidates[:5]:
-            message_id = str(item.get("message_id") or item.get("id") or item.get("uid") or "").strip()
-            detail = None
-            if message_id:
-                try:
-                    detail_data = self._query_request(f"/api/v1/email/query/{token}/detail/{message_id}")
-                    detail = detail_data if isinstance(detail_data, dict) else {}
-                except Exception:
-                    detail = None
-            message = self._message_from_item(mailbox, item, detail)
-            if not message:
-                continue
-            if fallback is None:
-                fallback = message
-            if _message_matches_email(message, str(mailbox.get("address") or "")):
-                return message
-        return fallback if len(candidates) == 1 else None
+        data = self._token_request(f"/api/v1/openapi/email/token/{quote(token, safe='')}/code")
+        return self._message_from_code_response(mailbox, data)
 
     def close(self) -> None:
         self.session.close()
