@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
+import json
 import random
 import re
 import string
@@ -14,12 +16,18 @@ from typing import Any, Callable, TypeVar
 import requests
 from curl_cffi import requests as curl_requests
 
+from services.config import DATA_DIR
+
 
 ResultT = TypeVar("ResultT")
+LUCKYOUS_ALIAS_FILE = DATA_DIR / "luckyous_aliases.json"
 domain_lock = Lock()
 provider_lock = Lock()
+luckyous_lock = Lock()
 domain_index = 0
 provider_index = 0
+luckyous_purchases_cache: dict[str, tuple[float, list[dict[str, str]]]] = {}
+luckyous_token_query_at: dict[str, float] = {}
 
 
 def _config(mail_config: dict) -> dict:
@@ -50,6 +58,24 @@ def _next_domain(domains: list[str]) -> str:
         value = domains[domain_index % len(domains)]
         domain_index = (domain_index + 1) % len(domains)
         return value
+
+
+def _load_luckyous_alias_state() -> dict[str, Any]:
+    try:
+        data = json.loads(LUCKYOUS_ALIAS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {"used_aliases": {}}
+    if not isinstance(data, dict):
+        return {"used_aliases": {}}
+    used_aliases = data.get("used_aliases")
+    if not isinstance(used_aliases, dict):
+        data["used_aliases"] = {}
+    return data
+
+
+def _save_luckyous_alias_state(data: dict[str, Any]) -> None:
+    LUCKYOUS_ALIAS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    LUCKYOUS_ALIAS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def _parse_received_at(value: Any) -> datetime | None:
@@ -611,6 +637,249 @@ class YydsMailProvider(BaseMailProvider):
         self.session.close()
 
 
+class LuckyousMailProvider(BaseMailProvider):
+    name = "luckyous"
+
+    def __init__(self, entry: dict, conf: dict):
+        super().__init__(conf, str(entry.get("provider_ref") or ""))
+        self.conf = {**conf, "wait_interval": max(float(conf.get("wait_interval") or 2), 6.0)}
+        self.api_base = str(entry.get("api_base") or "https://mails.luckyous.com").rstrip("/")
+        self.api_key = str(entry.get("api_key") or "").strip()
+        self.api_secret = str(entry.get("api_secret") or "").strip()
+        self.project_code = str(entry.get("project_code") or "").strip()
+        self.email_type = str(entry.get("email_type") or "").strip()
+        raw_domains = entry.get("domain") or ["outlook.com"]
+        if isinstance(raw_domains, list):
+            self.domains = [str(item).strip().lower().lstrip("@") for item in raw_domains if str(item).strip()]
+        else:
+            self.domains = [str(raw_domains).strip().lower().lstrip("@")] if str(raw_domains).strip() else []
+        self.domains = self.domains or ["outlook.com"]
+        self.aliases_per_email = max(1, int(entry.get("aliases_per_email") or 5))
+        self.alias_prefix = str(entry.get("alias_prefix") or "oa").strip() or "oa"
+        self.page_size = max(1, min(100, int(entry.get("page_size") or 100)))
+        self.session = requests.Session()
+        self.session.trust_env = False
+        self.session.headers.update({"User-Agent": conf["user_agent"], "Accept": "application/json"})
+
+    def _signed_headers(self, method: str, path: str, body: str) -> dict[str, str]:
+        if not self.api_key or not self.api_secret:
+            raise RuntimeError("Luckyous 需要配置 API Key 和 API Secret")
+        timestamp = str(int(time.time()))
+        payload = f"{method.upper()}{path}{timestamp}{body}"
+        signature = hmac.new(self.api_secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+        return {
+            "X-API-Key": self.api_key,
+            "X-Timestamp": timestamp,
+            "X-Signature": signature,
+            "Content-Type": "application/json",
+        }
+
+    def _openapi_request(self, method: str, path: str, params: dict[str, Any] | None = None, payload: dict[str, Any] | None = None, expected: tuple[int, ...] = (200,)) -> Any:
+        query = {key: value for key, value in (params or {}).items() if value not in (None, "")}
+        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")) if payload is not None else ""
+        resp = self.session.request(method.upper(), f"{self.api_base}{path}", params=query, data=body or None, headers=self._signed_headers(method, path, body), timeout=self.conf["request_timeout"], verify=False)
+        if resp.status_code not in expected:
+            raise RuntimeError(f"Luckyous OpenAPI 请求失败: {method} {path}, HTTP {resp.status_code}, body={resp.text[:300]}")
+        data = resp.json()
+        if isinstance(data, dict) and int(data.get("code", 0) or 0) != 0:
+            raise RuntimeError(f"Luckyous OpenAPI 返回错误: {data.get('message') or data.get('msg') or data.get('code')}")
+        return data.get("data") if isinstance(data, dict) and "data" in data else data
+
+    @staticmethod
+    def _query_token(path: str) -> str:
+        marker = "/api/v1/email/query/"
+        if marker not in path:
+            return ""
+        return path.split(marker, 1)[1].split("/", 1)[0]
+
+    def _throttle_query(self, path: str) -> None:
+        token = self._query_token(path)
+        if not token:
+            return
+        while True:
+            with luckyous_lock:
+                now = time.monotonic()
+                last = luckyous_token_query_at.get(token, 0.0)
+                wait_seconds = 6.0 - (now - last)
+                if wait_seconds <= 0:
+                    luckyous_token_query_at[token] = now
+                    return
+            time.sleep(wait_seconds)
+
+    def _query_request(self, path: str, expected: tuple[int, ...] = (200,)) -> Any:
+        self._throttle_query(path)
+        resp = self.session.get(f"{self.api_base}{path}", timeout=self.conf["request_timeout"], verify=False)
+        if resp.status_code not in expected:
+            raise RuntimeError(f"Luckyous 查询请求失败: GET {path}, HTTP {resp.status_code}, body={resp.text[:300]}")
+        data = resp.json()
+        if isinstance(data, dict) and int(data.get("code", 0) or 0) != 0:
+            raise RuntimeError(f"Luckyous 查询返回错误: {data.get('message') or data.get('msg') or data.get('code')}")
+        return data.get("data") if isinstance(data, dict) and "data" in data else data
+
+    @staticmethod
+    def _items(data: Any) -> list[dict[str, Any]]:
+        if isinstance(data, list):
+            return [item for item in data if isinstance(item, dict)]
+        if not isinstance(data, dict):
+            return []
+        for key in ("items", "list", "records", "mails", "data"):
+            value = data.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+        return []
+
+    @staticmethod
+    def _has_more(data: Any, items: list[dict[str, Any]], page: int, page_size: int) -> bool:
+        if not isinstance(data, dict):
+            return len(items) >= page_size
+        total = data.get("total") or data.get("count")
+        if isinstance(total, (int, float)):
+            return page * page_size < int(total)
+        pages = data.get("pages") or data.get("total_pages") or data.get("totalPages")
+        if isinstance(pages, (int, float)):
+            return page < int(pages)
+        return len(items) >= page_size
+
+    def _list_purchases(self) -> list[dict[str, str]]:
+        cache_key = f"{self.api_base}:{self.api_key}:{self.project_code}:{self.email_type}:{','.join(self.domains)}:{self.page_size}"
+        with luckyous_lock:
+            cached = luckyous_purchases_cache.get(cache_key)
+            if cached and time.monotonic() - cached[0] < 60:
+                return list(cached[1])
+
+        purchases: list[dict[str, str]] = []
+        seen_emails: set[str] = set()
+        for page in range(1, 101):
+            params: dict[str, Any] = {"page": page, "page_size": self.page_size}
+            if self.project_code:
+                params["project_code"] = self.project_code
+            if self.email_type:
+                params["email_type"] = self.email_type
+            data = self._openapi_request("GET", "/api/v1/openapi/email/purchases", params=params)
+            items = self._items(data)
+            for item in items:
+                email = str(item.get("email_address") or item.get("email") or item.get("address") or "").strip().lower()
+                token = str(item.get("token") or item.get("query_token") or "").strip()
+                status = str(item.get("status") or "").strip().lower()
+                if not email or not token:
+                    continue
+                if status and status in {"disabled", "expired", "invalid", "failed", "deleted"}:
+                    continue
+                if not any(email.endswith(f"@{domain}") for domain in self.domains):
+                    continue
+                if email in seen_emails:
+                    continue
+                seen_emails.add(email)
+                purchases.append({"email": email, "token": token})
+            if not self._has_more(data, items, page, self.page_size):
+                break
+        if not purchases:
+            raise RuntimeError(f"Luckyous 没有找到已购邮箱，后缀={','.join(self.domains)}")
+        purchases.sort(key=lambda item: item["email"])
+        with luckyous_lock:
+            luckyous_purchases_cache[cache_key] = (time.monotonic(), list(purchases))
+        return purchases
+
+    def _alias_address(self, email: str, alias_index: int) -> str:
+        local_part, _, domain = email.partition("@")
+        if not local_part or not domain:
+            raise RuntimeError(f"Luckyous 已购邮箱格式不正确: {email}")
+        return f"{local_part}+{self.alias_prefix}{alias_index}@{domain}"
+
+    def create_mailbox(self, username: str | None = None) -> dict[str, Any]:
+        purchases = self._list_purchases()
+        state_key = hashlib.sha256(
+            f"{self.api_base}:{self.api_key}:{self.project_code}:{self.email_type}:{','.join(self.domains)}:{self.aliases_per_email}:{self.alias_prefix}".encode("utf-8"),
+        ).hexdigest()
+        with luckyous_lock:
+            state = _load_luckyous_alias_state()
+            used_by_key = state.setdefault("used_aliases", {})
+            used_aliases = set(used_by_key.get(state_key) if isinstance(used_by_key.get(state_key), list) else [])
+            selected: tuple[dict[str, str], str] | None = None
+            for alias_index in range(1, self.aliases_per_email + 1):
+                for purchase in purchases:
+                    address = self._alias_address(purchase["email"], alias_index)
+                    if address in used_aliases:
+                        continue
+                    selected = (purchase, address)
+                    used_aliases.add(address)
+                    used_by_key[state_key] = sorted(used_aliases)
+                    _save_luckyous_alias_state(state)
+                    break
+                if selected:
+                    break
+            if not selected:
+                raise RuntimeError(f"Luckyous 已购邮箱别名额度不足：{len(purchases)} 个邮箱，每个 {self.aliases_per_email} 个别名")
+        purchase, address = selected
+        return {
+            "provider": self.name,
+            "provider_ref": self.provider_ref,
+            "address": address,
+            "base_address": purchase["email"],
+            "token": purchase["token"],
+        }
+
+    def _message_from_item(self, mailbox: dict[str, Any], item: dict[str, Any], detail: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        detail = detail if isinstance(detail, dict) else {}
+        raw = {**item, **detail}
+        message_id = str(raw.get("message_id") or raw.get("id") or raw.get("uid") or "").strip()
+        code = str(raw.get("verification_code") or raw.get("code") or "").strip()
+        text_content, html_content = _extract_content(raw)
+        if code and code not in text_content:
+            text_content = f"Verification code: {code}\n{text_content}".strip()
+        sender = raw.get("from") or raw.get("sender") or raw.get("from_address") or ""
+        if isinstance(sender, dict):
+            sender = sender.get("address") or sender.get("email") or sender.get("name") or ""
+        return {
+            "provider": self.name,
+            "mailbox": mailbox["address"],
+            "message_id": message_id or hashlib.sha256(json.dumps(raw, ensure_ascii=False, sort_keys=True).encode("utf-8", errors="replace")).hexdigest(),
+            "subject": str(raw.get("subject") or ""),
+            "sender": str(sender),
+            "text_content": text_content,
+            "html_content": html_content,
+            "received_at": _parse_received_at(raw.get("received_at") or raw.get("receivedAt") or raw.get("date") or raw.get("timestamp") or raw.get("created_at") or raw.get("createdAt")),
+            "to": raw.get("to") or raw.get("mailTo") or raw.get("receiver") or raw.get("receivers"),
+            "raw": raw,
+        }
+
+    def fetch_latest_message(self, mailbox: dict[str, Any]) -> dict[str, Any] | None:
+        token = str(mailbox.get("token") or "").strip()
+        if not token:
+            raise RuntimeError("Luckyous 缺少 token")
+        data = self._query_request(f"/api/v1/email/query/{token}")
+        items = self._items(data)
+        candidates = [item for item in items if isinstance(item, dict)]
+        candidates.sort(
+            key=lambda value: (
+                (_parse_received_at(value.get("received_at") or value.get("receivedAt") or value.get("date") or value.get("timestamp") or value.get("created_at") or value.get("createdAt")) or datetime.fromtimestamp(0, tz=timezone.utc)).timestamp(),
+                str(value.get("message_id") or value.get("id") or ""),
+            ),
+            reverse=True,
+        )
+        fallback: dict[str, Any] | None = None
+        for item in candidates[:5]:
+            message_id = str(item.get("message_id") or item.get("id") or item.get("uid") or "").strip()
+            detail = None
+            if message_id:
+                try:
+                    detail_data = self._query_request(f"/api/v1/email/query/{token}/detail/{message_id}")
+                    detail = detail_data if isinstance(detail_data, dict) else {}
+                except Exception:
+                    detail = None
+            message = self._message_from_item(mailbox, item, detail)
+            if not message:
+                continue
+            if fallback is None:
+                fallback = message
+            if _message_matches_email(message, str(mailbox.get("address") or "")):
+                return message
+        return fallback if len(candidates) == 1 else None
+
+    def close(self) -> None:
+        self.session.close()
+
+
 def _entries(mail_config: dict) -> list[dict]:
     return [{**item, "provider_ref": f"{item['type']}#{index + 1}"} for index, item in enumerate(mail_config["providers"])]
 
@@ -651,6 +920,8 @@ def _create_provider(mail_config: dict, provider: str = "", provider_ref: str = 
         return InbucketMailProvider(entry, conf)
     if entry["type"] == "yyds_mail":
         return YydsMailProvider(entry, conf)
+    if entry["type"] == "luckyous":
+        return LuckyousMailProvider(entry, conf)
     raise RuntimeError(f"不支持的 mail.provider: {entry['type']}")
 
 
