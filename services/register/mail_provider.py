@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import imaplib
 import json
 import random
 import re
 import string
 import time
 from datetime import datetime, timezone
-from email import message_from_string, policy
+from email import message_from_bytes, message_from_string, policy
 from email.utils import parsedate_to_datetime
 from threading import Lock
 from typing import Any, Callable, TypeVar
@@ -21,13 +22,16 @@ from services.config import DATA_DIR
 
 ResultT = TypeVar("ResultT")
 LUCKYOUS_ALIAS_FILE = DATA_DIR / "luckyous_aliases.json"
+OUTLOOK_ALIAS_FILE = DATA_DIR / "outlook_oauth2_aliases.json"
 domain_lock = Lock()
 provider_lock = Lock()
 luckyous_lock = Lock()
+outlook_lock = Lock()
 domain_index = 0
 provider_index = 0
 luckyous_purchases_cache: dict[str, tuple[float, list[dict[str, str]]]] = {}
 luckyous_token_query_at: dict[str, float] = {}
+outlook_access_token_cache: dict[str, tuple[float, str]] = {}
 
 
 def _config(mail_config: dict) -> dict:
@@ -60,9 +64,9 @@ def _next_domain(domains: list[str]) -> str:
         return value
 
 
-def _load_luckyous_alias_state() -> dict[str, Any]:
+def _load_alias_state_file(path) -> dict[str, Any]:
     try:
-        data = json.loads(LUCKYOUS_ALIAS_FILE.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {"used_aliases": {}}
     if not isinstance(data, dict):
@@ -73,9 +77,25 @@ def _load_luckyous_alias_state() -> dict[str, Any]:
     return data
 
 
+def _save_alias_state_file(path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _load_luckyous_alias_state() -> dict[str, Any]:
+    return _load_alias_state_file(LUCKYOUS_ALIAS_FILE)
+
+
 def _save_luckyous_alias_state(data: dict[str, Any]) -> None:
-    LUCKYOUS_ALIAS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    LUCKYOUS_ALIAS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    _save_alias_state_file(LUCKYOUS_ALIAS_FILE, data)
+
+
+def _load_outlook_alias_state() -> dict[str, Any]:
+    return _load_alias_state_file(OUTLOOK_ALIAS_FILE)
+
+
+def _save_outlook_alias_state(data: dict[str, Any]) -> None:
+    _save_alias_state_file(OUTLOOK_ALIAS_FILE, data)
 
 
 def _parse_received_at(value: Any) -> datetime | None:
@@ -637,6 +657,246 @@ class YydsMailProvider(BaseMailProvider):
         self.session.close()
 
 
+class OutlookOAuth2MailProvider(BaseMailProvider):
+    name = "outlook_oauth2"
+
+    def __init__(self, entry: dict, conf: dict):
+        super().__init__(conf, str(entry.get("provider_ref") or ""))
+        self.accounts = self._parse_accounts(entry)
+        self.aliases_per_email = max(1, int(entry.get("aliases_per_email") or 5))
+        self.alias_prefix = str(entry.get("alias_prefix") or "oa").strip() or "oa"
+        self.fetch_limit = max(1, min(100, int(entry.get("fetch_limit") or 30)))
+        self.imap_host = str(entry.get("imap_host") or "outlook.office365.com").strip()
+        self.imap_port = int(entry.get("imap_port") or 993)
+        self.imap_mailbox = str(entry.get("imap_mailbox") or "INBOX").strip() or "INBOX"
+        self.token_url = str(entry.get("token_url") or "https://login.microsoftonline.com/common/oauth2/v2.0/token").strip()
+        self.oauth_scope = str(entry.get("oauth_scope") or "https://outlook.office.com/IMAP.AccessAsUser.All offline_access").strip()
+        self.session = requests.Session()
+        self.session.trust_env = False
+        self.session.headers.update({"User-Agent": conf["user_agent"], "Accept": "application/json"})
+
+    @staticmethod
+    def _parse_accounts(entry: dict) -> list[dict[str, str]]:
+        raw = entry.get("accounts_text") or entry.get("accounts") or ""
+        lines: list[Any]
+        if isinstance(raw, list):
+            lines = raw
+        else:
+            lines = str(raw).splitlines()
+
+        accounts: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for index, item in enumerate(lines, start=1):
+            if isinstance(item, dict):
+                email = str(item.get("email") or item.get("address") or "").strip().lower()
+                password = str(item.get("password") or "").strip()
+                client_id = str(item.get("client_id") or item.get("clientId") or "").strip()
+                refresh_token = str(item.get("refresh_token") or item.get("refreshToken") or item.get("token") or "").strip()
+            else:
+                line = str(item or "").strip()
+                if not line:
+                    continue
+                parts = [part.strip() for part in line.split("----", 3)]
+                if len(parts) != 4:
+                    raise RuntimeError(f"Outlook OAuth2 第 {index} 行格式错误，应为：邮箱----密码----client_id----令牌")
+                email, password, client_id, refresh_token = parts
+                email = email.lower()
+            if not email or not client_id or not refresh_token:
+                raise RuntimeError(f"Outlook OAuth2 第 {index} 行缺少邮箱、client_id 或令牌")
+            if "@" not in email:
+                raise RuntimeError(f"Outlook OAuth2 第 {index} 行邮箱格式不正确: {email}")
+            if email in seen:
+                continue
+            seen.add(email)
+            accounts.append({"email": email, "password": password, "client_id": client_id, "refresh_token": refresh_token})
+        if not accounts:
+            raise RuntimeError("Outlook OAuth2 需要至少配置一行：邮箱----密码----client_id----令牌")
+        return accounts
+
+    def _state_key(self) -> str:
+        return hashlib.sha256(f"outlook_oauth2:{self.alias_prefix}".encode("utf-8")).hexdigest()
+
+    def _alias_address(self, email: str, alias_index: int) -> str:
+        local_part, _, domain = email.partition("@")
+        if not local_part or not domain:
+            raise RuntimeError(f"Outlook OAuth2 邮箱格式不正确: {email}")
+        return f"{local_part}+{self.alias_prefix}{alias_index}@{domain}"
+
+    def create_mailbox(self, username: str | None = None) -> dict[str, Any]:
+        state_key = self._state_key()
+        with outlook_lock:
+            state = _load_outlook_alias_state()
+            used_by_key = state.setdefault("used_aliases", {})
+            used_aliases = set(used_by_key.get(state_key) if isinstance(used_by_key.get(state_key), list) else [])
+            selected: tuple[dict[str, str], str] | None = None
+            for alias_index in range(1, self.aliases_per_email + 1):
+                for account in self.accounts:
+                    address = self._alias_address(account["email"], alias_index)
+                    if address in used_aliases:
+                        continue
+                    selected = (account, address)
+                    used_aliases.add(address)
+                    used_by_key[state_key] = sorted(used_aliases)
+                    _save_outlook_alias_state(state)
+                    break
+                if selected:
+                    break
+            if not selected:
+                raise RuntimeError(f"Outlook OAuth2 别名额度不足：{len(self.accounts)} 个邮箱，每个 {self.aliases_per_email} 个别名")
+        account, address = selected
+        return {
+            "provider": self.name,
+            "provider_ref": self.provider_ref,
+            "address": address,
+            "base_address": account["email"],
+            "client_id": account["client_id"],
+            "refresh_token": account["refresh_token"],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    def _refresh_access_token(self, mailbox: dict[str, Any]) -> str:
+        base_address = str(mailbox.get("base_address") or mailbox.get("address") or "").strip().lower()
+        client_id = str(mailbox.get("client_id") or "").strip()
+        refresh_token = str(mailbox.get("refresh_token") or mailbox.get("token") or "").strip()
+        if not client_id or not refresh_token:
+            raise RuntimeError("Outlook OAuth2 缺少 client_id 或令牌")
+        cache_key = hashlib.sha256(f"{base_address}:{client_id}:{refresh_token}".encode("utf-8")).hexdigest()
+        with outlook_lock:
+            cached = outlook_access_token_cache.get(cache_key)
+            if cached and time.monotonic() < cached[0] - 60:
+                return cached[1]
+
+        payload = {"client_id": client_id, "grant_type": "refresh_token", "refresh_token": refresh_token}
+        if self.oauth_scope:
+            payload["scope"] = self.oauth_scope
+        resp = self.session.post(self.token_url, data=payload, timeout=self.conf["request_timeout"], verify=False)
+        if resp.status_code != 200 and self.oauth_scope:
+            payload.pop("scope", None)
+            resp = self.session.post(self.token_url, data=payload, timeout=self.conf["request_timeout"], verify=False)
+        if resp.status_code != 200:
+            if refresh_token.count(".") >= 2:
+                return refresh_token
+            raise RuntimeError(f"Outlook OAuth2 刷新 access_token 失败: HTTP {resp.status_code}, body={resp.text[:300]}")
+        data = resp.json()
+        access_token = str(data.get("access_token") or "").strip()
+        if not access_token:
+            raise RuntimeError(f"Outlook OAuth2 token 响应缺少 access_token: {resp.text[:300]}")
+        new_refresh_token = str(data.get("refresh_token") or "").strip()
+        if new_refresh_token:
+            mailbox["refresh_token"] = new_refresh_token
+        expires_in = max(300, int(data.get("expires_in") or 3600))
+        with outlook_lock:
+            outlook_access_token_cache[cache_key] = (time.monotonic() + expires_in, access_token)
+            if new_refresh_token:
+                new_cache_key = hashlib.sha256(f"{base_address}:{client_id}:{new_refresh_token}".encode("utf-8")).hexdigest()
+                outlook_access_token_cache[new_cache_key] = (time.monotonic() + expires_in, access_token)
+        return access_token
+
+    def _connect(self, mailbox: dict[str, Any]) -> imaplib.IMAP4_SSL:
+        base_address = str(mailbox.get("base_address") or mailbox.get("address") or "").strip().lower()
+        if not base_address:
+            raise RuntimeError("Outlook OAuth2 缺少 base_address")
+        access_token = self._refresh_access_token(mailbox)
+        imap = imaplib.IMAP4_SSL(self.imap_host, self.imap_port, timeout=self.conf["request_timeout"])
+        auth_string = f"user={base_address}\x01auth=Bearer {access_token}\x01\x01"
+        try:
+            typ, data = imap.authenticate("XOAUTH2", lambda _: auth_string.encode("utf-8"))
+        except Exception:
+            try:
+                imap.logout()
+            except Exception:
+                pass
+            raise
+        if typ != "OK":
+            imap.logout()
+            raise RuntimeError(f"Outlook OAuth2 IMAP 鉴权失败: {data}")
+        return imap
+
+    @staticmethod
+    def _extract_mime_content(raw: bytes) -> tuple[Any, str, str]:
+        message = message_from_bytes(raw, policy=policy.default)
+        plain: list[str] = []
+        html: list[str] = []
+        for part in message.walk() if message.is_multipart() else [message]:
+            if part.get_content_maintype() == "multipart" or part.get_content_disposition() == "attachment":
+                continue
+            try:
+                payload = part.get_content()
+            except Exception:
+                payload = ""
+            if not payload:
+                continue
+            if part.get_content_type() == "text/html":
+                html.append(str(payload))
+            else:
+                plain.append(str(payload))
+        return message, "\n".join(plain).strip(), "\n".join(html).strip()
+
+    def _message_from_raw(self, mailbox: dict[str, Any], uid: bytes, raw: bytes) -> dict[str, Any] | None:
+        try:
+            message, text_content, html_content = self._extract_mime_content(raw)
+        except Exception:
+            return None
+        uid_text = uid.decode("utf-8", errors="replace") if isinstance(uid, bytes) else str(uid)
+        to_values: list[str] = []
+        for header in ("To", "Cc", "Delivered-To", "X-Original-To"):
+            to_values.extend(str(value) for value in message.get_all(header, []))
+        return {
+            "provider": self.name,
+            "mailbox": mailbox["address"],
+            "message_id": str(message.get("Message-ID") or uid_text).strip(),
+            "subject": str(message.get("Subject") or ""),
+            "sender": str(message.get("From") or ""),
+            "text_content": text_content,
+            "html_content": html_content,
+            "received_at": _parse_received_at(message.get("Date")),
+            "to": to_values,
+            "raw": {"uid": uid_text, "headers": {key: str(value) for key, value in message.items()}},
+        }
+
+    def fetch_latest_message(self, mailbox: dict[str, Any]) -> dict[str, Any] | None:
+        created_at = _parse_received_at(mailbox.get("created_at"))
+        created_after = (created_at.timestamp() - 300) if created_at else None
+        address = str(mailbox.get("address") or "").strip().lower()
+        base_address = str(mailbox.get("base_address") or "").strip().lower()
+        imap = self._connect(mailbox)
+        try:
+            typ, _ = imap.select(self.imap_mailbox, readonly=True)
+            if typ != "OK":
+                raise RuntimeError(f"Outlook OAuth2 无法打开邮箱目录: {self.imap_mailbox}")
+            typ, data = imap.uid("search", None, "ALL")
+            if typ != "OK" or not data or not data[0]:
+                return None
+            uids = data[0].split()
+            messages: list[dict[str, Any]] = []
+            for uid in reversed(uids[-self.fetch_limit:]):
+                typ, fetched = imap.uid("fetch", uid, "(BODY.PEEK[])")
+                if typ != "OK":
+                    continue
+                raw = next((part[1] for part in fetched if isinstance(part, tuple) and isinstance(part[1], bytes)), None)
+                if not raw:
+                    continue
+                item = self._message_from_raw(mailbox, uid, raw)
+                if not item:
+                    continue
+                received_at = item.get("received_at")
+                if created_after and isinstance(received_at, datetime) and received_at.timestamp() < created_after:
+                    continue
+                messages.append(item)
+            for item in messages:
+                if _message_matches_email(item, address) or _message_matches_email(item, base_address):
+                    return item
+            return messages[0] if len(messages) == 1 else None
+        finally:
+            try:
+                imap.logout()
+            except Exception:
+                pass
+
+    def close(self) -> None:
+        self.session.close()
+
+
 class LuckyousMailProvider(BaseMailProvider):
     name = "luckyous"
 
@@ -902,6 +1162,8 @@ def _create_provider(mail_config: dict, provider: str = "", provider_ref: str = 
         return InbucketMailProvider(entry, conf)
     if entry["type"] == "yyds_mail":
         return YydsMailProvider(entry, conf)
+    if entry["type"] == "outlook_oauth2":
+        return OutlookOAuth2MailProvider(entry, conf)
     if entry["type"] == "luckyous":
         return LuckyousMailProvider(entry, conf)
     raise RuntimeError(f"不支持的 mail.provider: {entry['type']}")

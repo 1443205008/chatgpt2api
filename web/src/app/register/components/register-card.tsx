@@ -56,6 +56,7 @@ export function RegisterCard() {
       ...(type === "gptmail" ? { api_key: "", default_domain: "" } : {}),
       ...(type === "yyds_mail" ? { api_base: "https://maliapi.215.im/v1", api_key: "", domain: [], subdomain: "", wildcard: false } : {}),
       ...(type === "luckyous" ? { api_base: "https://mails.luckyous.com", api_key: "", domain: ["outlook.com"], aliases_per_email: 5, alias_prefix: "oa", page_size: 100, project_id: "", tag_id: "", keyword: "", user_disabled: 0 } : {}),
+      ...(type === "outlook_oauth2" ? { accounts_text: "", aliases_per_email: 5, alias_prefix: "oa", fetch_limit: 30, imap_host: "outlook.office365.com", imap_port: 993 } : {}),
     });
   };
 
@@ -152,6 +153,7 @@ export function RegisterCard() {
               {providers.map((provider, index) => {
                 const type = String(provider.type || "tempmail_lol");
                 const domains = Array.isArray(provider.domain) ? provider.domain.map(String).join("\n") : "";
+                const outlookAccounts = String(provider.accounts_text || "");
                 return (
                   <div key={index} className="space-y-3 border-t border-stone-200 pt-3 first:border-t-0 first:pt-0">
                     <div className="flex items-center justify-between gap-3">
@@ -180,6 +182,7 @@ export function RegisterCard() {
                             <SelectItem value="gptmail">gptmail(未测试)</SelectItem>
                             <SelectItem value="yyds_mail">yyds_mail</SelectItem>
                             <SelectItem value="luckyous">luckyous</SelectItem>
+                            <SelectItem value="outlook_oauth2">outlook_oauth2</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
@@ -225,6 +228,26 @@ export function RegisterCard() {
                           </div>
                         </>
                       ) : null}
+                      {type === "outlook_oauth2" ? (
+                        <>
+                          <div className="space-y-2">
+                            <label className="text-sm text-stone-700">单邮箱别名数量</label>
+                            <Input value={String(provider.aliases_per_email || 5)} onChange={(event) => updateProvider(index, { aliases_per_email: Number(event.target.value) || 5 })} className="h-10 rounded-xl border-stone-200 bg-white" disabled={config.enabled} />
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-sm text-stone-700">别名前缀</label>
+                            <Input value={String(provider.alias_prefix || "oa")} onChange={(event) => updateProvider(index, { alias_prefix: event.target.value })} placeholder="oa" className="h-10 rounded-xl border-stone-200 bg-white" disabled={config.enabled} />
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-sm text-stone-700">拉取邮件数</label>
+                            <Input value={String(provider.fetch_limit || 30)} onChange={(event) => updateProvider(index, { fetch_limit: Number(event.target.value) || 30 })} placeholder="30" className="h-10 rounded-xl border-stone-200 bg-white" disabled={config.enabled} />
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-sm text-stone-700">IMAP Host</label>
+                            <Input value={String(provider.imap_host || "outlook.office365.com")} onChange={(event) => updateProvider(index, { imap_host: event.target.value })} placeholder="outlook.office365.com" className="h-10 rounded-xl border-stone-200 bg-white" disabled={config.enabled} />
+                          </div>
+                        </>
+                      ) : null}
                       {type === "inbucket" ? (
                         <label className="flex items-center gap-3 pt-8 text-sm text-stone-700">
                           <Checkbox checked={Boolean(provider.random_subdomain ?? true)} onCheckedChange={(checked) => updateProvider(index, { random_subdomain: Boolean(checked) })} disabled={config.enabled} />
@@ -261,6 +284,12 @@ export function RegisterCard() {
                       <div className="space-y-2">
                         <label className="text-sm text-stone-700">{type === "inbucket" ? "基础域名列表" : type === "luckyous" ? "已购邮箱后缀" : "Domain"}</label>
                         <Textarea value={domains} onChange={(event) => updateProvider(index, { domain: event.target.value.split(/[\n,]/).map((item) => item.trim()).filter(Boolean) })} placeholder={type === "inbucket" ? "每行一个基础域名，系统会自动生成随机子域名" : type === "luckyous" ? "outlook.com" : type === "moemail" ? "每行一个域名" : "每行一个域名，留空则使用服务默认域名"} className="min-h-20 rounded-xl border-stone-200 bg-white font-mono text-xs" disabled={config.enabled} />
+                      </div>
+                    ) : null}
+                    {type === "outlook_oauth2" ? (
+                      <div className="space-y-2">
+                        <label className="text-sm text-stone-700">Outlook OAuth2 账号</label>
+                        <Textarea value={outlookAccounts} onChange={(event) => updateProvider(index, { accounts_text: event.target.value })} placeholder={"邮箱----密码----client_id----令牌\nuser@outlook.com----password----client_id----refresh_token"} className="min-h-28 rounded-xl border-stone-200 bg-white font-mono text-xs" disabled={config.enabled} />
                       </div>
                     ) : null}
                   </div>
