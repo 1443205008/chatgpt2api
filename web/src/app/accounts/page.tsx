@@ -149,15 +149,31 @@ function maskToken(token?: string) {
   return `${token.slice(0, 16)}...${token.slice(-8)}`;
 }
 
-function downloadTokens(accounts: Account[]) {
-  const content = `${accounts.map((account) => account.access_token).join("\n")}\n`;
+function downloadLines(lines: string[], filename: string) {
+  const content = `${lines.join("\n")}\n`;
   const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `accounts-${Date.now()}.txt`;
+  link.download = filename;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+function downloadTokens(accounts: Account[]) {
+  downloadLines(
+    accounts.map((account) => account.access_token),
+    `accounts-${Date.now()}.txt`,
+  );
+}
+
+function downloadEmails(accounts: Account[]) {
+  const emails = accounts.map((account) => (account.email ?? "").trim()).filter(Boolean);
+  if (emails.length === 0) {
+    toast.error("所选账号没有可导出的邮箱");
+    return;
+  }
+  downloadLines(emails, `accounts-email-${Date.now()}.txt`);
 }
 
 async function copyText(value: string) {
@@ -279,6 +295,11 @@ function AccountsPageContent() {
   const selectedTokens = useMemo(() => {
     const selectedSet = new Set(selectedIds);
     return accounts.filter((item) => selectedSet.has(item.access_token)).map((item) => item.access_token);
+  }, [accounts, selectedIds]);
+
+  const selectedAccounts = useMemo(() => {
+    const selectedSet = new Set(selectedIds);
+    return accounts.filter((item) => selectedSet.has(item.access_token));
   }, [accounts, selectedIds]);
 
   const abnormalTokens = useMemo(() => {
@@ -622,6 +643,24 @@ function AccountsPageContent() {
                 >
                   {isDeleting ? <LoaderCircle className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
                   删除所选
+                </Button>
+                <Button
+                  variant="ghost"
+                  className="h-8 rounded-lg px-3 text-stone-500 hover:bg-stone-100"
+                  onClick={() => downloadEmails(selectedAccounts)}
+                  disabled={selectedAccounts.length === 0}
+                >
+                  <Download className="size-4" />
+                  导出所选邮箱
+                </Button>
+                <Button
+                  variant="ghost"
+                  className="h-8 rounded-lg px-3 text-stone-500 hover:bg-stone-100"
+                  onClick={() => downloadTokens(selectedAccounts)}
+                  disabled={selectedAccounts.length === 0}
+                >
+                  <Download className="size-4" />
+                  导出所选 Token
                 </Button>
                 {selectedIds.length > 0 ? (
                   <span className="rounded-lg bg-stone-100 px-2.5 py-1 text-xs font-medium text-stone-600">
