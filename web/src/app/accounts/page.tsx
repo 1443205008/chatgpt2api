@@ -167,15 +167,6 @@ function downloadTokens(accounts: Account[]) {
   );
 }
 
-function downloadEmails(accounts: Account[]) {
-  const emails = accounts.map((account) => (account.email ?? "").trim()).filter(Boolean);
-  if (emails.length === 0) {
-    toast.error("所选账号没有可导出的邮箱");
-    return;
-  }
-  downloadLines(emails, `accounts-email-${Date.now()}.txt`);
-}
-
 async function copyText(value: string) {
   try {
     if (navigator.clipboard?.writeText && window.isSecureContext) {
@@ -228,6 +219,11 @@ function AccountsPageContent() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
+
+  useEffect(() => {
+    // 切换筛选条件时清空已选，避免对隐藏项误操作
+    setSelectedIds([]);
+  }, [query, typeFilter, statusFilter]);
 
   const loadAccounts = async (silent = false) => {
     if (!silent) {
@@ -406,6 +402,36 @@ function AccountsPageContent() {
     try {
       await copyText(token);
       toast.success("token 已复制");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "复制失败";
+      toast.error(`复制失败：${message}`);
+    }
+  };
+
+  const handleCopySelectedEmails = async () => {
+    const emails = selectedAccounts.map((account) => (account.email ?? "").trim()).filter(Boolean);
+    if (emails.length === 0) {
+      toast.error("所选账号没有可复制的邮箱");
+      return;
+    }
+    try {
+      await copyText(emails.join("\n"));
+      toast.success(`已复制 ${emails.length} 个邮箱`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "复制失败";
+      toast.error(`复制失败：${message}`);
+    }
+  };
+
+  const handleCopySelectedTokens = async () => {
+    const tokens = selectedAccounts.map((account) => account.access_token).filter(Boolean);
+    if (tokens.length === 0) {
+      toast.error("没有可复制的 Token");
+      return;
+    }
+    try {
+      await copyText(tokens.join("\n"));
+      toast.success(`已复制 ${tokens.length} 个 Token`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "复制失败";
       toast.error(`复制失败：${message}`);
@@ -647,20 +673,20 @@ function AccountsPageContent() {
                 <Button
                   variant="ghost"
                   className="h-8 rounded-lg px-3 text-stone-500 hover:bg-stone-100"
-                  onClick={() => downloadEmails(selectedAccounts)}
+                  onClick={() => void handleCopySelectedEmails()}
                   disabled={selectedAccounts.length === 0}
                 >
-                  <Download className="size-4" />
-                  导出所选邮箱
+                  <Copy className="size-4" />
+                  复制所选邮箱
                 </Button>
                 <Button
                   variant="ghost"
                   className="h-8 rounded-lg px-3 text-stone-500 hover:bg-stone-100"
-                  onClick={() => downloadTokens(selectedAccounts)}
+                  onClick={() => void handleCopySelectedTokens()}
                   disabled={selectedAccounts.length === 0}
                 >
-                  <Download className="size-4" />
-                  导出所选 Token
+                  <Copy className="size-4" />
+                  复制所选 Token
                 </Button>
                 {selectedIds.length > 0 ? (
                   <span className="rounded-lg bg-stone-100 px-2.5 py-1 text-xs font-medium text-stone-600">
