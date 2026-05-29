@@ -4,6 +4,17 @@ export type AccountType = string;
 export type AccountStatus = "正常" | "限流" | "异常" | "禁用";
 export type ImageModel = "gpt-image-2" | "codex-gpt-image-2";
 export type AuthRole = "admin" | "user";
+export type ImageStorageMode = "local" | "webdav" | "both";
+
+export type ImageStorageSettings = {
+  enabled: boolean;
+  mode: ImageStorageMode;
+  webdav_url: string;
+  webdav_username: string;
+  webdav_password: string;
+  webdav_root_path: string;
+  public_base_url: string;
+};
 
 export type Account = {
   access_token: string;
@@ -68,6 +79,7 @@ export type SettingsConfig = {
   auto_remove_invalid_accounts?: boolean;
   auto_remove_rate_limited_accounts?: boolean;
   log_levels?: string[];
+  image_storage?: ImageStorageSettings;
   backup?: BackupSettings;
   backup_state?: BackupState;
   [key: string]: unknown;
@@ -400,6 +412,20 @@ export async function updateSettingsConfig(settings: SettingsConfig) {
 
 export async function testBackupConnection() {
   return httpRequest<{ result: { ok: boolean; status: number } }>("/api/backup/test", {
+    method: "POST",
+    body: {},
+  });
+}
+
+export async function testImageStorageConnection() {
+  return httpRequest<{ result: { ok: boolean; status: number; error?: string } }>("/api/image-storage/test", {
+    method: "POST",
+    body: {},
+  });
+}
+
+export async function syncImageStorage() {
+  return httpRequest<{ result: { uploaded: number; skipped: number; failed: number } }>("/api/image-storage/sync", {
     method: "POST",
     body: {},
   });
