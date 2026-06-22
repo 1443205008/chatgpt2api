@@ -259,6 +259,17 @@
                       />
                     </label>
 
+                    <label v-if="providerType(provider) === 'gptmail'" class="register-field">
+                      <span class="register-label">Key 来源</span>
+                      <GroupedSelectMenu
+                        v-model="provider.key_mode"
+                        :groups="gptMailKeyModeGroups"
+                        selected-indicator="none"
+                        :disabled="registerConfig.enabled"
+                        block
+                      />
+                    </label>
+
                     <label v-if="providerUsesApiBase(provider)" class="register-field">
                       <span class="register-label">{{ apiBaseLabel(provider) }}</span>
                       <Input
@@ -285,7 +296,7 @@
                       />
                     </label>
 
-                    <label v-if="providerUsesApiKey(provider)" class="register-field">
+                    <label v-if="providerUsesApiKey(provider) && !providerUsesPublicGptMailKey(provider)" class="register-field">
                       <span class="register-label">API Key</span>
                       <Input
                         v-model.trim="provider.api_key"
@@ -300,7 +311,7 @@
                       <Input
                         v-model.trim="provider.default_domain"
                         block
-                        :placeholder="providerType(provider) === 'duckmail' ? 'duckmail.sbs' : ''"
+                        :placeholder="providerType(provider) === 'duckmail' ? 'duckmail.sbs' : providerType(provider) === 'gptmail' ? 'sk-ai.eu.cc' : ''"
                         :disabled="registerConfig.enabled"
                       />
                     </label>
@@ -414,6 +425,44 @@
                         Wildcard
                       </Checkbox>
                     </label>
+
+                    <label v-if="providerType(provider) === 'gptmail'" class="register-checkbox-field register-checkbox-field--compact register-field--full">
+                      <Checkbox v-model="provider.local_compose" :disabled="registerConfig.enabled">
+                        已知域名本地拼接
+                      </Checkbox>
+                    </label>
+                  </div>
+                </div>
+
+                <div v-if="providerType(provider) === 'gptmail'" class="register-provider-section register-provider-section--soft">
+                  <div class="register-provider-section-title">GPTMail 额度</div>
+                  <div class="register-gptmail-panel">
+                    <div class="register-gptmail-summary">
+                      <MetaChip size="xs" :tone="gptMailStatusTone(index)">
+                        {{ gptMailStatusTitle(index, provider) }}
+                      </MetaChip>
+                      <MetaChip size="xs" tone="muted">Key {{ gptMailKeyModeLabel(provider) }}</MetaChip>
+                      <MetaChip v-if="gptMailStatusByIndex(index)?.key_hint" size="xs" tone="muted">
+                        {{ gptMailStatusByIndex(index)?.key_hint }}
+                      </MetaChip>
+                      <MetaChip v-if="gptMailRemainingText(index)" size="xs" tone="info">
+                        剩余 {{ gptMailRemainingText(index) }}
+                      </MetaChip>
+                      <MetaChip v-if="gptMailResetText(index)" size="xs" tone="muted">
+                        {{ gptMailResetText(index) }}
+                      </MetaChip>
+                    </div>
+                    <div class="register-provider-actions register-provider-actions--left">
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        :disabled="registerConfig.enabled || gptMailStatusBusy(index)"
+                        @click="checkGptMailStatus(index, provider)"
+                      >
+                        {{ gptMailStatusBusy(index) ? '检测中' : '检测额度' }}
+                      </Button>
+                    </div>
+                    <p class="register-preview-line">{{ gptMailStatusHint(index, provider) }}</p>
                   </div>
                 </div>
 
@@ -606,7 +655,7 @@ import type { ActionMenuItem } from 'nanocat-ui'
 import { proxyApi } from '@/api'
 import { getAuthToken } from '@/api/client'
 import { parseProxyReference, serializeProxyReference, type ProxyGroup } from '@/api/proxy'
-import { registerApi, type LegacyRegisterConfig, type OutlookMailboxParseStats, type RegisterProvider } from '@/api/register'
+import { registerApi, type GptMailStatus, type LegacyRegisterConfig, type OutlookMailboxParseStats, type RegisterProvider } from '@/api/register'
 import { FloatingActionMenu, FormSection, MetaChip, MetricStrip, PageLoadingState, PagePanel, PanelHeader, RuntimeLogPanel, StateBadge, StateBlock, SurfaceBox, type RuntimeLogPanelLine } from '@/components/ai'
 import GroupedSelectMenu from '@/components/ui/GroupedSelectMenu.vue'
 import { useConfirmDialog } from '@/composables/useConfirmDialog'
@@ -615,6 +664,16 @@ import { useToast } from '@/composables/useToast'
 type RegisterMode = 'total' | 'quota' | 'available'
 type OutlookResetScope = 'all' | 'failed' | 'unused'
 type RegisterProxyMode = 'global' | 'direct' | 'group' | 'custom'
+type GptMailStatusState = {
+  loading: boolean
+  error: string
+  data: GptMailStatus | null
+}
+type GptMailCheckOptions = {
+  silent?: boolean
+  force?: boolean
+  reschedule?: boolean
+}
 
 const toast = useToast()
 const confirmDialog = useConfirmDialog()
@@ -627,6 +686,11 @@ const proxyGroups = ref<ProxyGroup[]>([])
 const registerProxyMode = ref<RegisterProxyMode>('global')
 const selectedRegisterProxyGroupId = ref('')
 const customRegisterProxyInput = ref('')
+const gptMailStatusStates = ref<Record<number, GptMailStatusState>>({})
+const gptMailClockNow = ref(Date.now())
+const gptMailRefreshTimers = new Map<number, number[]>()
+const gptMailClockTimer = ref<number | null>(null)
+const gptMailResetFallbackSeconds = 5 * 60
 
 const defaultRegisterConfig: LegacyRegisterConfig = {
   mail: {
@@ -696,6 +760,11 @@ const cfAuthModeOptions = [
   { value: 'query-key', label: 'Query key' },
 ]
 const cfAuthModeGroups = [{ options: cfAuthModeOptions }]
+const gptMailKeyModeOptions = [
+  { value: 'public', label: '公共测试 Key' },
+  { value: 'custom', label: '自定义 Key' },
+]
+const gptMailKeyModeGroups = [{ options: gptMailKeyModeOptions }]
 
 const outlookModeOptions = [
   { value: 'graph', label: 'Graph API' },
@@ -717,7 +786,7 @@ const providerTypeKeys: Record<string, string[]> = {
   moemail: ['api_base', 'api_key', 'domain', 'expiry_time'],
   inbucket: ['api_base', 'domain', 'random_subdomain'],
   duckmail: ['api_key', 'default_domain'],
-  gptmail: ['api_key', 'default_domain'],
+  gptmail: ['key_mode', 'api_key', 'default_domain', 'local_compose'],
   yyds_mail: ['api_base', 'api_key', 'domain', 'subdomain', 'wildcard'],
   ddg_mail: ['api_base', 'ddg_token', 'cf_inbox_jwt', 'admin_password', 'cf_api_key', 'cf_auth_mode', 'cf_create_path', 'cf_messages_path'],
   outlook_token: ['mailboxes', 'mode', 'imap_host', 'message_limit'],
@@ -809,12 +878,16 @@ function normalizeRegisterConfig(raw: LegacyRegisterConfig): LegacyRegisterConfi
 
 function normalizeProvider(provider: RegisterProvider): RegisterProvider {
   const type = providerType(provider)
-  return {
+  const normalized = {
     ...defaultProvider(type),
     ...provider,
     type,
     enable: provider.enable !== false,
   }
+  if (type === 'gptmail' && !provider.key_mode && isFilled(provider.api_key)) {
+    normalized.key_mode = 'custom'
+  }
+  return normalized
 }
 
 function defaultProvider(type = 'cloudmail_gen'): RegisterProvider {
@@ -833,7 +906,7 @@ function defaultProvider(type = 'cloudmail_gen'): RegisterProvider {
     case 'duckmail':
       return { ...base, api_key: '', default_domain: 'duckmail.sbs' }
     case 'gptmail':
-      return { ...base, api_key: '', default_domain: '' }
+      return { ...base, key_mode: 'public', api_key: '', default_domain: '', local_compose: false }
     case 'yyds_mail':
       return { ...base, api_base: 'https://maliapi.215.im/v1', api_key: '', domain: [], subdomain: '', wildcard: false }
     case 'ddg_mail':
@@ -972,7 +1045,8 @@ function providerRequirementMessages(provider: RegisterProvider) {
       requireValue(provider.api_key, 'API Key')
       break
     case 'gptmail':
-      requireValue(provider.api_key, 'API Key')
+      if (!providerUsesPublicGptMailKey(provider)) requireValue(provider.api_key, 'API Key')
+      if (provider.local_compose) requireValue(provider.default_domain, '默认域名')
       break
     case 'yyds_mail':
       requireValue(provider.api_key, 'API Key')
@@ -996,6 +1070,7 @@ function providerRequirementMessages(provider: RegisterProvider) {
 
 function updateProviderType(index: number, type: string) {
   if (!registerConfig.value) return
+  clearGptMailState(index)
   const providers = [...registerProviders.value]
   const current = providers[index] || {}
   providers[index] = providerWithTypeDraft(current, type)
@@ -1014,6 +1089,10 @@ function providerUsesApiBase(provider: RegisterProvider) {
 
 function providerUsesApiKey(provider: RegisterProvider) {
   return ['tempmail_lol', 'moemail', 'duckmail', 'gptmail', 'yyds_mail'].includes(providerType(provider))
+}
+
+function providerUsesPublicGptMailKey(provider: RegisterProvider) {
+  return providerType(provider) === 'gptmail' && String(provider.key_mode || 'public') !== 'custom'
 }
 
 function providerUsesAdminPassword(provider: RegisterProvider) {
@@ -1057,6 +1136,10 @@ function domainPlaceholder(provider: RegisterProvider) {
   if (type === 'tempmail_lol') return '每行一个域名，可留空使用服务默认'
   if (type === 'yyds_mail') return '每行一个域名，可留空'
   return '每行一个域名'
+}
+
+function gptMailKeyModeLabel(provider: RegisterProvider) {
+  return providerUsesPublicGptMailKey(provider) ? '公共' : '自定义'
 }
 
 function outlookPoolStats(provider: RegisterProvider) {
@@ -1126,6 +1209,227 @@ function outlookImportSummaryText(provider: RegisterProvider) {
   return `上次导入：输入 ${input}，有效 ${valid}，重复 ${duplicates}，无效 ${invalid}，已保存 ${saved}`
 }
 
+function gptMailState(index: number): GptMailStatusState {
+  return gptMailStatusStates.value[index] || { loading: false, error: '', data: null }
+}
+
+function setGptMailState(index: number, state: GptMailStatusState) {
+  gptMailStatusStates.value = { ...gptMailStatusStates.value, [index]: state }
+}
+
+function clearGptMailRefreshTimer(index: number) {
+  const timers = gptMailRefreshTimers.get(index) || []
+  timers.forEach(timer => window.clearTimeout(timer))
+  if (timers.length) {
+    gptMailRefreshTimers.delete(index)
+  }
+}
+
+function clearAllGptMailRefreshTimers() {
+  gptMailRefreshTimers.forEach(timers => timers.forEach(timer => window.clearTimeout(timer)))
+  gptMailRefreshTimers.clear()
+}
+
+function clearGptMailState(index: number) {
+  clearGptMailRefreshTimer(index)
+  const next = { ...gptMailStatusStates.value }
+  delete next[index]
+  gptMailStatusStates.value = next
+}
+
+function pruneGptMailStates() {
+  const next: Record<number, GptMailStatusState> = {}
+  Object.entries(gptMailStatusStates.value).forEach(([key, state]) => {
+    const index = Number(key)
+    const provider = registerProviders.value[index]
+    if (provider && providerType(provider) === 'gptmail') {
+      next[index] = state
+    } else {
+      clearGptMailRefreshTimer(index)
+    }
+  })
+  Array.from(gptMailRefreshTimers.keys()).forEach((index) => {
+    const provider = registerProviders.value[index]
+    if (!provider || providerType(provider) !== 'gptmail') clearGptMailRefreshTimer(index)
+  })
+  gptMailStatusStates.value = next
+}
+
+function gptMailSecondsUntilReset(status: GptMailStatus, now = gptMailClockNow.value) {
+  const resetAt = Date.parse(String(status.reset_at || ''))
+  if (Number.isFinite(resetAt)) {
+    return Math.ceil((resetAt - now) / 1000)
+  }
+  const seconds = Number(status.seconds_until_reset)
+  if (!Number.isFinite(seconds) || seconds <= 0) return null
+  const checkedAt = Date.parse(String(status.checked_at || ''))
+  if (Number.isFinite(checkedAt)) {
+    return Math.ceil((checkedAt + seconds * 1000 - now) / 1000)
+  }
+  return Math.ceil(seconds)
+}
+
+function gptMailTimerDelay(seconds: number) {
+  return Math.min(Math.max(seconds * 1000, 1000), 2_147_483_000)
+}
+
+function gptMailResetDelays(status: GptMailStatus) {
+  const seconds = gptMailSecondsUntilReset(status, Date.now())
+  if (seconds === null) return []
+  const resetSeconds = Math.max(0, seconds)
+  return [
+    { delay: gptMailTimerDelay(resetSeconds), reschedule: false },
+    { delay: gptMailTimerDelay(resetSeconds + gptMailResetFallbackSeconds), reschedule: true },
+  ]
+}
+
+function scheduleGptMailRefresh(index: number, status: GptMailStatus) {
+  clearGptMailRefreshTimer(index)
+  if (String(status.key_mode || 'public') !== 'public') return
+  const timers = gptMailResetDelays(status).map(({ delay, reschedule }) => {
+    let timer = 0
+    timer = window.setTimeout(() => {
+      const activeTimers = gptMailRefreshTimers.get(index) || []
+      const nextTimers = activeTimers.filter(item => item !== timer)
+      if (nextTimers.length) {
+        gptMailRefreshTimers.set(index, nextTimers)
+      } else {
+        gptMailRefreshTimers.delete(index)
+      }
+      const provider = registerProviders.value[index]
+      if (!provider || providerType(provider) !== 'gptmail') return
+      void refreshGptMailPublicKey(index, provider, { reschedule })
+    }, delay)
+    return timer
+  })
+  if (timers.length) gptMailRefreshTimers.set(index, timers)
+}
+
+function gptMailStatusByIndex(index: number) {
+  return gptMailState(index).data
+}
+
+function gptMailStatusBusy(index: number) {
+  return gptMailState(index).loading
+}
+
+function gptMailStatusTone(index: number) {
+  const state = gptMailState(index)
+  if (state.loading) return 'info'
+  if (state.error) return 'danger'
+  if (!state.data) return 'muted'
+  if (state.data.is_active === false) return 'warning'
+  return 'success'
+}
+
+function gptMailStatusTitle(index: number, provider: RegisterProvider) {
+  const state = gptMailState(index)
+  if (state.loading) return '检测中'
+  if (state.error) return '检测失败'
+  if (!state.data) return providerUsesPublicGptMailKey(provider) ? '公共 Key' : '未检测'
+  return state.data.is_active === false ? '不可用' : '可用'
+}
+
+function formatGptMailNumber(value: unknown) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return ''
+  if (number < 0) return '不限'
+  return new Intl.NumberFormat().format(number)
+}
+
+function formatGptMailDuration(seconds: unknown) {
+  const total = Number(seconds)
+  if (!Number.isFinite(total) || total <= 0) return ''
+  if (total < 60) return `${Math.ceil(total)}s 后重置`
+  const hours = Math.floor(total / 3600)
+  const minutes = Math.floor((total % 3600) / 60)
+  if (hours > 0) return `${hours}h ${minutes}m 后重置`
+  return `${Math.max(1, minutes)}m 后重置`
+}
+
+function gptMailRemainingText(index: number) {
+  const status = gptMailStatusByIndex(index)
+  if (!status) return ''
+  if (String(status.key_mode || '') === 'custom') {
+    const remaining = formatGptMailNumber(status.remaining_total)
+    const total = formatGptMailNumber(status.total_limit)
+    if (remaining && total) return `${remaining} / ${total}`
+    if (remaining) return remaining
+  }
+  return formatGptMailNumber(status.remaining_today ?? status.remaining_total)
+}
+
+function gptMailResetText(index: number) {
+  const status = gptMailStatusByIndex(index)
+  if (!status) return ''
+  if (String(status.key_mode || '') === 'custom' && !status.reset_at && !status.seconds_until_reset) return ''
+  const seconds = gptMailSecondsUntilReset(status)
+  const countdown = formatGptMailDuration(seconds)
+  if (countdown) return countdown
+  if (seconds !== null && seconds <= 0) return '等待刷新'
+  if (status.reset_at) return `${formatClock(status.reset_at)} 重置`
+  return ''
+}
+
+function gptMailStatusHint(index: number, provider: RegisterProvider) {
+  const state = gptMailState(index)
+  if (state.error) return state.error
+  if (provider.local_compose && !String(provider.default_domain || '').trim()) {
+    return '本地拼接模式需要填写默认域名。'
+  }
+  if (provider.local_compose) {
+    return '本地拼接会少调用一次生成邮箱接口；请确认默认域名当前可用。'
+  }
+  if (!state.data) {
+    return providerUsesPublicGptMailKey(provider)
+      ? '使用 GPTMail 公共测试 Key，启动注册时后端会自动获取并缓存。'
+      : '填写自定义 Key 后可检测总额度和剩余额度。'
+  }
+  if (String(state.data.key_mode || provider.key_mode || '') === 'custom') {
+    const totalUsed = formatGptMailNumber(state.data.total_usage)
+    const totalLimit = formatGptMailNumber(state.data.total_limit)
+    const totalRemaining = formatGptMailNumber(state.data.remaining_total)
+    const checkedText = state.data.checked_at ? `检测于 ${formatClock(state.data.checked_at)}` : '状态已更新'
+    const resetText = state.data.reset_at ? `重置时间 ${formatClock(state.data.reset_at)}` : '自定义 Key 未返回独立重置时间'
+    if (totalUsed && totalLimit) {
+      return `总计已用 ${totalUsed} / ${totalLimit}${totalRemaining ? `，剩余 ${totalRemaining}` : ''}，${checkedText}；${resetText}。`
+    }
+    if (totalRemaining) return `总剩余 ${totalRemaining}，${checkedText}；${resetText}。`
+    return `${checkedText}；${resetText}。`
+  }
+  const used = formatGptMailNumber(state.data.used_today)
+  const limit = formatGptMailNumber(state.data.daily_limit)
+  if (used && limit) return `今日已用 ${used} / ${limit}，${state.data.checked_at ? `检测于 ${formatClock(state.data.checked_at)}` : '状态已更新'}。`
+  return state.data.checked_at ? `状态已更新，检测于 ${formatClock(state.data.checked_at)}。` : '状态已更新。'
+}
+
+async function checkGptMailStatus(index: number, provider: RegisterProvider, options: GptMailCheckOptions = {}) {
+  const previous = gptMailState(index).data
+  setGptMailState(index, { ...gptMailState(index), loading: true, error: '' })
+  try {
+    const response = await registerApi.getGptMailStatus(sanitizeProvider(provider), options.force ?? true)
+    setGptMailState(index, { loading: false, error: '', data: response.status })
+    if (options.reschedule !== false) scheduleGptMailRefresh(index, response.status)
+    if (!options.silent) toast.success('GPTMail 额度已更新')
+  } catch (error: any) {
+    const message = error?.message || '检测 GPTMail 额度失败'
+    setGptMailState(index, { loading: false, error: message, data: previous })
+    if (!options.silent) toast.error(message)
+  }
+}
+
+async function refreshGptMailPublicKey(index: number, provider: RegisterProvider, options: GptMailCheckOptions = {}) {
+  const previous = gptMailState(index).data
+  try {
+    const response = await registerApi.refreshGptMailKey(sanitizeProvider(provider), options.force ?? true)
+    setGptMailState(index, { loading: false, error: '', data: response.status })
+    if (options.reschedule !== false) scheduleGptMailRefresh(index, response.status)
+  } catch (error: any) {
+    const message = error?.message || '刷新 GPTMail 公共 Key 失败'
+    setGptMailState(index, { loading: false, error: message, data: previous })
+  }
+}
+
 function handleOutlookPoolAction(key: string) {
   if (key === 'retry_failed') {
     void retryFailedOutlookPool()
@@ -1149,6 +1453,8 @@ async function deleteProvider(index: number) {
     confirmText: '删除',
   })
   if (!ok) return
+  clearAllGptMailRefreshTimers()
+  gptMailStatusStates.value = {}
   registerConfig.value.mail.providers = registerProviders.value.filter((_, itemIndex) => itemIndex !== index)
 }
 
@@ -1165,6 +1471,7 @@ function stringValue(value: unknown) {
 function applyRegisterConfig(config: LegacyRegisterConfig) {
   registerConfig.value = normalizeRegisterConfig(config)
   syncRegisterProxyControlsFromValue(registerConfig.value.proxy)
+  pruneGptMailStates()
 }
 
 function syncRegisterProxyControlsFromValue(value: unknown) {
@@ -1453,6 +1760,21 @@ function stopPolling() {
   }
 }
 
+function startGptMailClock() {
+  stopGptMailClock()
+  gptMailClockNow.value = Date.now()
+  gptMailClockTimer.value = window.setInterval(() => {
+    gptMailClockNow.value = Date.now()
+  }, 10_000)
+}
+
+function stopGptMailClock() {
+  if (gptMailClockTimer.value) {
+    window.clearInterval(gptMailClockTimer.value)
+    gptMailClockTimer.value = null
+  }
+}
+
 function formatClock(value?: string | null) {
   if (!value) return ''
   const date = new Date(value)
@@ -1468,6 +1790,7 @@ function normalizeLogLevel(level?: string) {
 }
 
 onMounted(async () => {
+  startGptMailClock()
   await Promise.all([loadRegisterConfig(), loadProxyGroups()])
   startLiveUpdates()
 })
@@ -1475,6 +1798,8 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   stopLiveUpdates()
   stopPolling()
+  stopGptMailClock()
+  clearAllGptMailRefreshTimers()
 })
 </script>
 
@@ -1580,6 +1905,12 @@ onBeforeUnmount(() => {
   padding-bottom: 8px;
 }
 
+.register-checkbox-field--compact {
+  min-height: 0;
+  align-items: center;
+  padding-bottom: 0;
+}
+
 .register-provider-list {
   display: grid;
   gap: 14px;
@@ -1657,6 +1988,18 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+}
+
+.register-gptmail-panel {
+  display: grid;
+  gap: 8px;
+}
+
+.register-gptmail-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
 }
 
 .register-provider-actions {

@@ -211,6 +211,12 @@ domain_index = 0
 provider_index = 0
 cloudmail_token_lock = Lock()
 cloudmail_token_cache: dict[str, tuple[str, float]] = {}
+gptmail_status_lock = Lock()
+gptmail_status_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+
+GPTMAIL_DEFAULT_API_BASE = "https://mail.chatgpt.org.uk"
+GPTMAIL_PUBLIC_STATUS_CACHE_SECONDS = 60
+GPTMAIL_CUSTOM_STATUS_CACHE_SECONDS = 30
 
 
 def _config(mail_config: dict) -> dict:
@@ -260,6 +266,195 @@ def _create_session(conf: dict):
         verify=False,
     )
     return requests.Session(**kwargs)
+
+
+def _gptmail_api_base(entry: dict) -> str:
+    value = str(entry.get("api_base") or "").strip()
+    return (value or GPTMAIL_DEFAULT_API_BASE).rstrip("/")
+
+
+def _gptmail_key_mode(entry: dict) -> str:
+    mode = str(entry.get("key_mode") or entry.get("api_key_mode") or "").strip().lower()
+    if mode in {"public", "custom"}:
+        return mode
+    return "custom" if str(entry.get("api_key") or "").strip() else "public"
+
+
+def _gptmail_cache_key(api_base: str, key_mode: str, api_key: str = "", reveal_public_key: bool = False) -> str:
+    digest = hashlib.sha256(f"{api_base}|{key_mode}|{api_key}|{int(reveal_public_key)}".encode()).hexdigest()[:16]
+    return f"{api_base}|{key_mode}|{digest}"
+
+
+def _gptmail_mask_key(value: str) -> str:
+    key = str(value or "").strip()
+    if len(key) <= 8:
+        return "*" * len(key) if key else ""
+    return f"{key[:5]}...{key[-4:]}"
+
+
+def _gptmail_int(value: Any) -> int | None:
+    try:
+        if value is None or value == "":
+            return None
+        return int(float(value))
+    except Exception:
+        return None
+
+
+def _gptmail_status_cache_expiry(data: dict[str, Any], now: float, ttl: int) -> float:
+    seconds_until_reset = _gptmail_int(data.get("seconds_until_reset"))
+    if seconds_until_reset and seconds_until_reset > 0:
+        return now + max(1, seconds_until_reset)
+    reset_at = str(data.get("reset_at") or "").strip()
+    if reset_at:
+        try:
+            reset_date = datetime.fromisoformat(reset_at[:-1] + "+00:00" if reset_at.endswith("Z") else reset_at)
+            if reset_date.tzinfo is None:
+                reset_date = reset_date.replace(tzinfo=timezone.utc)
+            seconds_from_reset_at = int(reset_date.timestamp() - now)
+            if seconds_from_reset_at > 0:
+                return now + max(1, seconds_from_reset_at)
+        except Exception:
+            pass
+    return now + ttl
+
+
+def _gptmail_status_payload(entry: dict, conf: dict, *, reveal_public_key: bool = False) -> dict[str, Any]:
+    api_base = _gptmail_api_base(entry)
+    key_mode = _gptmail_key_mode(entry)
+    api_key = str(entry.get("api_key") or "").strip()
+    session = _create_session(conf)
+    try:
+        if key_mode == "public":
+            headers = {"User-Agent": conf["user_agent"], "Accept": "application/json"}
+            params = {"reveal": "1"} if reveal_public_key else None
+            if reveal_public_key:
+                headers["X-Public-Key-Reveal"] = "click"
+            resp = session.request("GET", f"{api_base}/api/public-key-status", headers=headers, params=params, timeout=conf["request_timeout"], verify=False)
+            if resp.status_code != 200:
+                raise RuntimeError(f"GPTMail 公共 Key 状态请求失败: HTTP {resp.status_code}, body={resp.text[:300]}")
+            body = resp.json()
+            if not isinstance(body, dict) or not body.get("success"):
+                raise RuntimeError(str((body or {}).get("error") or "GPTMail 公共 Key 状态返回异常"))
+            data = body.get("data") if isinstance(body.get("data"), dict) else {}
+            return {
+                "ok": True,
+                "key_mode": key_mode,
+                "api_base": api_base,
+                "source": "public-key-status",
+                "is_active": bool(data.get("is_active", True)),
+                "daily_limit": _gptmail_int(data.get("daily_limit")),
+                "used_today": _gptmail_int(data.get("used_today")),
+                "remaining_today": _gptmail_int(data.get("remaining_today")),
+                "reset_at": data.get("reset_at") or "",
+                "seconds_until_reset": _gptmail_int(data.get("seconds_until_reset")),
+                "api_key": str(data.get("key") or "").strip(),
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+            }
+
+        if not api_key:
+            raise RuntimeError("GPTMail 自定义模式需要配置 API Key")
+        resp = session.request(
+            "GET",
+            f"{api_base}/api/stats",
+            headers={"User-Agent": conf["user_agent"], "Accept": "application/json", "X-API-Key": api_key},
+            timeout=conf["request_timeout"],
+            verify=False,
+        )
+        if resp.status_code != 200:
+            raise RuntimeError(f"GPTMail 自定义 Key 状态请求失败: HTTP {resp.status_code}, body={resp.text[:300]}")
+        body = resp.json()
+        if not isinstance(body, dict) or not body.get("success"):
+            raise RuntimeError(str((body or {}).get("error") or "GPTMail 自定义 Key 状态返回异常"))
+        usage = body.get("usage") if isinstance(body.get("usage"), dict) else {}
+        return {
+            "ok": True,
+            "key_mode": key_mode,
+            "api_base": api_base,
+            "source": "stats",
+            "is_active": True,
+            "daily_limit": _gptmail_int(usage.get("daily_limit")),
+            "used_today": _gptmail_int(usage.get("used_today")),
+            "remaining_today": _gptmail_int(usage.get("remaining_today")),
+            "total_limit": _gptmail_int(usage.get("total_limit")),
+            "total_usage": _gptmail_int(usage.get("total_usage")),
+            "remaining_total": _gptmail_int(usage.get("remaining_total")),
+            "reset_at": usage.get("reset_at") or body.get("reset_at") or "",
+            "seconds_until_reset": _gptmail_int(usage.get("seconds_until_reset") or body.get("seconds_until_reset")),
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+        }
+    finally:
+        session.close()
+
+
+def _gptmail_cached_status(entry: dict, conf: dict, *, reveal_public_key: bool = False, force: bool = False) -> dict[str, Any]:
+    api_base = _gptmail_api_base(entry)
+    key_mode = _gptmail_key_mode(entry)
+    api_key = str(entry.get("api_key") or "").strip()
+    ttl = GPTMAIL_PUBLIC_STATUS_CACHE_SECONDS if key_mode == "public" else GPTMAIL_CUSTOM_STATUS_CACHE_SECONDS
+    cache_key = _gptmail_cache_key(api_base, key_mode, api_key, reveal_public_key)
+    now = time.time()
+    if not force:
+        with gptmail_status_lock:
+            cached = gptmail_status_cache.get(cache_key)
+            if cached and now < cached[0]:
+                return dict(cached[1])
+    data = _gptmail_status_payload(entry, conf, reveal_public_key=reveal_public_key)
+    expires_at = _gptmail_status_cache_expiry(data, now, ttl)
+    with gptmail_status_lock:
+        gptmail_status_cache[cache_key] = (expires_at, dict(data))
+    return data
+
+
+def _gptmail_api_key(entry: dict, conf: dict) -> str:
+    if _gptmail_key_mode(entry) == "custom":
+        api_key = str(entry.get("api_key") or "").strip()
+        if not api_key:
+            raise RuntimeError("GPTMail 自定义模式需要配置 API Key")
+        return api_key
+    status = _gptmail_cached_status(entry, conf, reveal_public_key=True)
+    api_key = str(status.get("api_key") or "").strip()
+    if not api_key:
+        raise RuntimeError("GPTMail 公共 Key 获取失败")
+    return api_key
+
+
+def gptmail_status(mail_config: dict, entry: dict | None = None, *, force: bool = False) -> dict[str, Any]:
+    provider_entry = dict(entry or {})
+    if not provider_entry:
+        provider_entry = next((dict(item) for item in _entries(mail_config) if item.get("type") == "gptmail"), {})
+    if not provider_entry:
+        raise RuntimeError("未找到 GPTMail 邮箱来源")
+    provider_entry["type"] = "gptmail"
+    conf = _config(mail_config)
+    reveal_public_key = _gptmail_key_mode(provider_entry) == "public"
+    data = _gptmail_cached_status(provider_entry, conf, reveal_public_key=reveal_public_key, force=force)
+    public_key = str(data.pop("api_key", "") or "").strip()
+    key_hint = _gptmail_mask_key(public_key if data.get("key_mode") == "public" else str(provider_entry.get("api_key") or ""))
+    return {**data, "key_hint": key_hint, "local_compose": bool(provider_entry.get("local_compose")), "default_domain": str(provider_entry.get("default_domain") or "").strip()}
+
+
+def refresh_gptmail_public_key(mail_config: dict, entry: dict | None = None, *, force: bool = True) -> dict[str, Any]:
+    provider_entry = dict(entry or {})
+    if not provider_entry:
+        provider_entry = next((dict(item) for item in _entries(mail_config) if item.get("type") == "gptmail"), {})
+    if not provider_entry:
+        raise RuntimeError("未找到 GPTMail 邮箱来源")
+    provider_entry["type"] = "gptmail"
+    if _gptmail_key_mode(provider_entry) != "public":
+        raise RuntimeError("只有 GPTMail 公共 Key 模式需要自动刷新 Key")
+    conf = _config(mail_config)
+    data = _gptmail_cached_status(provider_entry, conf, reveal_public_key=True, force=force)
+    public_key = str(data.pop("api_key", "") or "").strip()
+    if not public_key:
+        raise RuntimeError("GPTMail 公共 Key 获取失败")
+    return {
+        **data,
+        "key_hint": _gptmail_mask_key(public_key),
+        "local_compose": bool(provider_entry.get("local_compose")),
+        "default_domain": str(provider_entry.get("default_domain") or "").strip(),
+        "refreshed_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 def _parse_received_at(value: Any) -> datetime | None:
@@ -825,20 +1020,28 @@ class GptMailProvider(BaseMailProvider):
 
     def __init__(self, entry: dict, conf: dict):
         super().__init__(conf, str(entry.get("provider_ref") or ""))
-        self.api_key = str(entry["api_key"]).strip()
+        self.api_base = _gptmail_api_base(entry)
+        self.key_mode = _gptmail_key_mode(entry)
+        self.api_key = _gptmail_api_key(entry, conf)
         self.default_domain = str(entry.get("default_domain") or "").strip()
+        self.local_compose = bool(entry.get("local_compose"))
         self.session = _create_session(conf)
         self.session.headers.update({"User-Agent": conf["user_agent"], "Accept": "application/json", "Content-Type": "application/json", "X-API-Key": self.api_key})
 
     def _request(self, method: str, path: str, params: dict | None = None, payload: dict | None = None):
         query = dict(params or {})
-        resp = self.session.request(method.upper(), f"https://mail.chatgpt.org.uk{path}", params=query, json=payload, timeout=self.conf["request_timeout"], verify=False)
+        resp = self.session.request(method.upper(), f"{self.api_base}{path}", params=query, json=payload, timeout=self.conf["request_timeout"], verify=False)
         if resp.status_code != 200:
             raise RuntimeError(f"GPTMail 请求失败: {method} {path}, HTTP {resp.status_code}, body={resp.text[:300]}")
         data = resp.json()
         return data["data"] if isinstance(data, dict) and "data" in data else data
 
     def create_mailbox(self, username: str | None = None) -> dict[str, Any]:
+        if self.local_compose:
+            if not self.default_domain:
+                raise RuntimeError("GPTMail 本地拼接模式需要配置默认域名")
+            prefix = username or _random_mailbox_name()
+            return {"provider": self.name, "provider_ref": self.provider_ref, "address": f"{prefix}@{self.default_domain}"}
         payload = {key: value for key, value in {"prefix": username, "domain": self.default_domain}.items() if value}
         data = self._request("POST" if payload else "GET", "/api/generate-email", payload=payload or None)
         return {"provider": self.name, "provider_ref": self.provider_ref, "address": str(data["email"])}

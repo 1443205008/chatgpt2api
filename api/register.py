@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 
-from fastapi import APIRouter, Header
+from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -24,6 +24,11 @@ class RegisterConfigRequest(BaseModel):
 
 class OutlookPoolResetRequest(BaseModel):
     scope: str | None = None
+
+
+class GptMailStatusRequest(BaseModel):
+    provider: dict | None = None
+    force: bool | None = None
 
 
 def create_router() -> APIRouter:
@@ -58,6 +63,22 @@ def create_router() -> APIRouter:
     async def reset_outlook_pool(body: OutlookPoolResetRequest, authorization: str | None = Header(default=None)):
         require_admin(authorization)
         return {"register": register_service.reset_outlook_pool(body.scope or "all")}
+
+    @router.post("/api/register/gptmail/status")
+    async def get_gptmail_status(body: GptMailStatusRequest, authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        try:
+            return {"status": register_service.gptmail_status(body.provider, force=bool(body.force))}
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.post("/api/register/gptmail/refresh-key")
+    async def refresh_gptmail_public_key(body: GptMailStatusRequest, authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        try:
+            return {"status": register_service.refresh_gptmail_public_key(body.provider, force=body.force is not False)}
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.get("/api/register/events")
     async def register_events(token: str = ""):

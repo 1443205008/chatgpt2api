@@ -240,6 +240,16 @@ class RegisterService:
             )
         return self.get()
 
+    def gptmail_status(self, provider: dict | None = None, force: bool = False) -> dict:
+        with self._lock:
+            mail = json.loads(json.dumps(self._config.get("mail") if isinstance(self._config.get("mail"), dict) else {}, ensure_ascii=False))
+        return mail_provider.gptmail_status(mail, provider, force=force)
+
+    def refresh_gptmail_public_key(self, provider: dict | None = None, force: bool = True) -> dict:
+        with self._lock:
+            mail = json.loads(json.dumps(self._config.get("mail") if isinstance(self._config.get("mail"), dict) else {}, ensure_ascii=False))
+        return mail_provider.refresh_gptmail_public_key(mail, provider, force=force)
+
     def _append_log(self, text: str, color: str = "") -> None:
         with self._lock:
             self._logs.append({"time": _now(), "text": str(text), "level": str(color or "info")})

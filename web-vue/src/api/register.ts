@@ -33,6 +33,8 @@ export type RegisterProvider = {
   cf_create_path?: string
   cf_messages_path?: string
   default_domain?: string
+  key_mode?: 'public' | 'custom' | string
+  local_compose?: boolean
   email_prefix?: string
   subdomain?: string | string[]
   domain?: string[]
@@ -97,6 +99,26 @@ export type LegacyRegisterConfig = {
   }>
 }
 
+export type GptMailStatus = {
+  ok?: boolean
+  key_mode?: string
+  api_base?: string
+  source?: string
+  is_active?: boolean
+  daily_limit?: number | null
+  used_today?: number | null
+  remaining_today?: number | null
+  total_limit?: number | null
+  total_usage?: number | null
+  remaining_total?: number | null
+  reset_at?: string
+  seconds_until_reset?: number | null
+  checked_at?: string
+  key_hint?: string
+  local_compose?: boolean
+  default_domain?: string
+}
+
 export const registerApi = {
   getConfig() {
     return apiClient.get<any, { register: LegacyRegisterConfig }>('/api/register')
@@ -115,5 +137,11 @@ export const registerApi = {
   },
   resetOutlookPool(scope: 'all' | 'failed' | 'unused' = 'all') {
     return apiClient.post<any, { register: LegacyRegisterConfig }>('/api/register/outlook-pool/reset', { scope })
+  },
+  getGptMailStatus(provider: RegisterProvider, force = true) {
+    return apiClient.post<any, { status: GptMailStatus }>('/api/register/gptmail/status', { provider, force })
+  },
+  refreshGptMailKey(provider: RegisterProvider, force = true) {
+    return apiClient.post<any, { status: GptMailStatus }>('/api/register/gptmail/refresh-key', { provider, force })
   },
 }
