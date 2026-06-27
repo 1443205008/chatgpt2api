@@ -7,12 +7,10 @@
             容器内存实时窗口，不做历史时间范围；用于观察等待入口、等待账号、等待出口、上游生成、上游断流和本地拒绝/繁忙。
           </p>
           <p class="mt-1 text-xs text-muted-foreground">
-            最近更新：{{ monitorData?.updated_at || '未获取' }}
+            入口排队高时可适当调大环境变量 CHATGPT2API_THREAD_TOKENS 提高本地并发；最近更新：{{ monitorData?.updated_at || '未获取' }}
           </p>
         </template>
         <template #actions>
-          <MetaChip size="xs" tone="info">活跃 {{ summary?.active ?? 0 }}</MetaChip>
-          <MetaChip size="xs" tone="muted">线程 {{ threadTokens }}</MetaChip>
           <StateBadge :tone="autoRefresh ? 'success' : 'muted'" shape="rounded">
             {{ autoRefresh ? '自动刷新' : '已暂停' }}
           </StateBadge>
@@ -90,8 +88,8 @@
             </p>
           </template>
           <template #actions>
-            <MetaChip size="xs" tone="info">线程 {{ threadTokens }}</MetaChip>
-            <MetaChip size="xs" tone="muted">活跃 {{ activeRows.length }}</MetaChip>
+            <MetaChip size="xs" tone="info">当前并发 {{ activeRows.length }} / {{ threadTokens }}</MetaChip>
+            <MetaChip size="xs" tone="muted">入口排队 {{ entryQueueText }}</MetaChip>
           </template>
         </PanelHeader>
       </div>
@@ -331,6 +329,8 @@ const activeStageItems = computed(() =>
 
 const entryQueueMetricKeys = ['handler_queue_ms', 'stream_first_queue_ms'] as const
 const entryAccountMetricKeys = ['handler_queue_ms', 'stream_first_queue_ms', 'account_wait_ms', 'egress_wait_ms'] as const
+const entryQueueP95 = computed(() => maxMetricFromMap(summary.value?.metric_p95 || {}, entryQueueMetricKeys))
+const entryQueueText = computed(() => formatMs(entryQueueP95.value))
 
 const diagnosticGroups = computed(() => {
   const data = summary.value
@@ -345,7 +345,7 @@ const diagnosticGroups = computed(() => {
       title: '实时概览',
       meta: '窗口、成功率、瓶颈',
       items: [
-        { key: 'active', label: '活跃请求', value: data?.active ?? 0, meta: `线程 ${threadTokens.value}`, valueClass: 'text-foreground' },
+        { key: 'active', label: '当前并发', value: data?.active ?? 0, meta: `线程容量 ${threadTokens.value}`, valueClass: 'text-foreground' },
         { key: 'completed', label: '完成窗口', value: data?.completed ?? 0, meta: completedWindowText.value, valueClass: 'text-foreground' },
         { key: 'success', label: '成功率', value: `${data?.success_rate ?? 0}%`, meta: `成功 ${data?.success ?? 0}`, valueClass: 'text-emerald-600 dark:text-emerald-400' },
         { key: 'failed', label: '失败数', value: data?.failed ?? 0, meta: '窗口内失败', valueClass: Number(data?.failed || 0) > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-foreground' },
@@ -360,13 +360,13 @@ const diagnosticGroups = computed(() => {
       title: '入口、账号与出口',
       meta: '本地线程、账号池、代理出口',
       items: [
-        { key: 'handler_queue_ms', label: '入口线程等待', value: formatMs(p95.handler_queue_ms), meta: 'run_in_threadpool', valueClass: 'text-sky-600 dark:text-sky-400' },
-        { key: 'stream_first_queue_ms', label: '首包线程等待', value: formatMs(p95.stream_first_queue_ms), meta: '读取首个事件', valueClass: 'text-sky-600 dark:text-sky-400' },
+        { key: 'handler_queue_ms', label: '入口排队', value: formatMs(p95.handler_queue_ms), meta: '等待后端线程', valueClass: 'text-sky-600 dark:text-sky-400' },
+        { key: 'stream_first_queue_ms', label: '首包排队', value: formatMs(p95.stream_first_queue_ms), meta: '等待流式首包', valueClass: 'text-sky-600 dark:text-sky-400' },
         { key: 'account_wait_ms', label: '账号等待', value: formatMs(p95.account_wait_ms), meta: '账号池筛选', valueClass: 'text-cyan-600 dark:text-cyan-400' },
         { key: 'egress_wait_ms', label: '出口等待', value: formatMs(p95.egress_wait_ms), meta: activeEgressMeta(), valueClass: 'text-teal-600 dark:text-teal-400' },
         { key: 'egress_acquire_ms', label: '出口租约', value: formatMs(p95.egress_acquire_ms), meta: '代理节点并发', valueClass: 'text-teal-600 dark:text-teal-400' },
         { key: 'entry_account_total_ms', label: '入口账号合计', value: formatMs(entryAccountTotal), meta: '入口 + 首包 + 账号 + 出口', valueClass: 'text-sky-600 dark:text-sky-400' },
-        { key: 'entry_p95', label: '入口等待 P95', value: formatMs(maxMetricFromMap(p95, entryQueueMetricKeys)), meta: `慢 ${data?.slow_counts?.handler_queue ?? 0}`, valueClass: 'text-sky-600 dark:text-sky-400' },
+        { key: 'entry_p95', label: '入口排队 P95', value: entryQueueText.value, meta: `线程容量 ${threadTokens.value} · 慢 ${data?.slow_counts?.handler_queue ?? 0}`, valueClass: 'text-sky-600 dark:text-sky-400' },
         { key: 'local_busy', label: '本地拒绝/繁忙', value: `${localBusy}`, meta: '无号 / 并发 / 策略', valueClass: 'text-foreground' },
       ],
     },
@@ -528,8 +528,19 @@ function proxySourceLabel(value: unknown) {
   return source
 }
 
+function egressLabelText(row: RealtimeMonitorRecord) {
+  const value = String(row.egress_label || '').trim()
+  const source = String(row.proxy_source || '').trim()
+  if (!value || value === 'direct') return ''
+  if (value === source || value === `${source}_profile`) return ''
+  if (value.startsWith('proxy:')) return ''
+  return value
+}
+
 function egressText(row: RealtimeMonitorRecord) {
   const label = proxySourceLabel(row.proxy_source)
+  const egressLabel = egressLabelText(row)
+  if (egressLabel) return `${label} ${egressLabel}`
   const hash = String(row.proxy_hash || '')
   if (hash && hash !== 'direct') return `${label} ${hash}`
   return label
@@ -546,7 +557,11 @@ function activeEgressMeta() {
   if (!items.length) return '代理组、默认代理、Runtime 或直连出口'
   return items
     .slice(0, 2)
-    .map(([key, count]) => `${proxySourceLabel(key.split(':')[0])} ${count}`)
+    .map(([key, count]) => {
+      const [source, ...rest] = key.split(':')
+      const detail = rest.join(':')
+      return `${proxySourceLabel(source)}${detail ? ` ${detail}` : ''} ${count}`
+    })
     .join(' / ')
 }
 
@@ -717,7 +732,7 @@ function slowRowReason(row: RealtimeMonitorRecord) {
     return `主要卡在重试等待，通常是轮询、TLS 或连接失败后的退避时间。`
   }
   if (top.key === 'handler_queue_ms' || top.key === 'stream_first_queue_ms') {
-    return `主要卡在等待入口，通常是服务端并发线程被占满。`
+    return `主要卡在等待入口，通常是后端同步线程容量不足；可通过环境变量 CHATGPT2API_THREAD_TOKENS 调整。`
   }
   return `主要耗时：${top.label} ${top.value}。`
 }

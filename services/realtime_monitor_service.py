@@ -10,12 +10,15 @@ from typing import Any
 from utils.timezone import beijing_from_timestamp, beijing_now_str
 
 
-def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+def _env_int(name: str, default: int, minimum: int, maximum: int | None = None) -> int:
     try:
         value = int(str(os.getenv(name, "") or default).strip())
     except (TypeError, ValueError):
         value = default
-    return min(max(value, minimum), maximum)
+    value = max(value, minimum)
+    if maximum is not None:
+        value = min(value, maximum)
+    return value
 
 
 def _int_ms(value: object) -> int:
@@ -153,7 +156,7 @@ class RealtimeMonitorService:
         self._completed: deque[dict[str, Any]] = deque(maxlen=completed_limit)
         self._events: deque[dict[str, Any]] = deque(maxlen=event_limit)
         self._threadpool: dict[str, int] = {
-            "tokens": _env_int("CHATGPT2API_THREAD_TOKENS", 80, 1, 500),
+            "tokens": _env_int("CHATGPT2API_THREAD_TOKENS", 80, 1),
             "previous_tokens": 0,
         }
 
@@ -473,6 +476,15 @@ class RealtimeMonitorService:
 
     def _egress_label(self, record: dict[str, Any]) -> str:
         source = str(record.get("proxy_source") or "direct").strip() or "direct"
+        egress_label = str(record.get("egress_label") or "").strip()
+        if (
+            egress_label
+            and egress_label != "direct"
+            and egress_label != source
+            and egress_label != f"{source}_profile"
+            and not egress_label.startswith("proxy:")
+        ):
+            return f"{source}:{egress_label}"
         proxy_hash = str(record.get("proxy_hash") or "").strip()
         if proxy_hash and proxy_hash != "direct":
             return f"{source}:{proxy_hash}"
@@ -486,7 +498,7 @@ class RealtimeMonitorService:
 
     def _detail_diagnostic(self, record: dict[str, Any], events: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         diagnostic: dict[str, Any] = {}
-        for key in ("stage", "stage_label", "proxy_source", "proxy_hash", "egress_mode", "local_reason"):
+        for key in ("stage", "stage_label", "proxy_source", "proxy_hash", "egress_mode", "egress_key", "egress_label", "local_reason"):
             value = str(record.get(key) or "").strip()
             if value:
                 diagnostic[key] = value

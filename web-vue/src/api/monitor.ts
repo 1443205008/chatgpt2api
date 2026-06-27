@@ -14,6 +14,9 @@ export interface RealtimeMonitorImage {
   metrics?: MonitorMetricMap
   proxy_source?: string
   proxy_hash?: string
+  egress_key?: string
+  egress_label?: string
+  image_egress_limit?: number
   has_proxy?: boolean
   egress_mode?: string
   local_reason?: string
@@ -44,6 +47,9 @@ export interface RealtimeMonitorRecord {
   url_count?: number
   proxy_source?: string
   proxy_hash?: string
+  egress_key?: string
+  egress_label?: string
+  image_egress_limit?: number
   has_proxy?: boolean
   egress_mode?: string
   local_reason?: string
