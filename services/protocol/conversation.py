@@ -27,6 +27,7 @@ from utils.helper import (
 )
 from utils.image_tokens import count_image_content_tokens
 from utils.log import logger
+from utils.diagnostics import diagnostic_excerpt
 
 
 class ImageGenerationError(Exception):
@@ -39,6 +40,9 @@ class ImageGenerationError(Exception):
         param: str | None = None,
         account_email: str = "",
         conversation_id: str = "",
+        raw_error: str = "",
+        upstream_error: str = "",
+        raw_upstream_message: str = "",
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
@@ -47,11 +51,14 @@ class ImageGenerationError(Exception):
         self.param = param
         self.account_email = account_email
         self.conversation_id = conversation_id
+        self.raw_error = raw_error
+        self.upstream_error = upstream_error
+        self.raw_upstream_message = raw_upstream_message
 
     def to_openai_error(self) -> dict[str, Any]:
         error_dict = {
             "error": {
-                "message": public_image_error_message(str(self)),
+                "message": public_image_error_message(str(self), code=self.code),
                 "type": self.error_type,
                 "param": self.param,
                 "code": self.code,
@@ -62,11 +69,13 @@ class ImageGenerationError(Exception):
         return error_dict
 
 
-def public_image_error_message(message: str) -> str:
+def public_image_error_message(message: str, code: str | None = None) -> str:
     text = str(message or "").strip()
     lower = text.lower()
     if not config.image_error_friendly_enabled:
         return _legacy_public_image_error_message(text)
+    if code in {"upstream_text_reply", "no_image_generated"}:
+        return _public_text_reply_message(text)
     if not text:
         return _friendly_image_error_message("fallback")
     selection_key = _image_account_selection_error_key(lower)
@@ -203,8 +212,8 @@ def _image_message_error_metadata(message: str) -> tuple[int, str, str]:
     if _is_content_policy_image_message(message):
         return 400, "invalid_request_error", "content_policy_violation"
     if is_model_text_reply_instead_of_image(message):
-        return 502, "server_error", "upstream_text_reply"
-    return 502, "server_error", "no_image_generated"
+        return 400, "invalid_request_error", "upstream_text_reply"
+    return 400, "invalid_request_error", "no_image_generated"
 
 
 def _monitor_image_stage(request: "ConversationRequest", event: str, **data: Any) -> None:
@@ -337,7 +346,7 @@ def _resolve_image_urls_with_monitor(
                 index=index,
                 total=total,
                 status="failed",
-                upstream_error=repr(exc),
+                upstream_error=diagnostic_excerpt(repr(exc), 1000),
             )
             log_payload: dict[str, Any] = {
                 "event": "image_resolve_failed",
@@ -398,7 +407,7 @@ def _download_image_bytes_with_monitor(
                 index=index,
                 total=total,
                 status="failed",
-                upstream_error=repr(exc),
+                upstream_error=diagnostic_excerpt(repr(exc), 1000),
             )
             log_payload: dict[str, Any] = {
                 "event": "image_download_failed",
@@ -1198,7 +1207,7 @@ def _get_detailed_error_from_tasks(
         logger.warning({
             "event": "image_task_error_query_failed",
             "conversation_id": conversation_id,
-            "error": str(exc),
+            "error": diagnostic_excerpt(exc, 300),
         })
         return ""
 
@@ -1654,7 +1663,7 @@ def _generate_single_image(
                     })
                 _monitor_image_stage(
                     request,
-                    "image_egress_ready",
+                    "image_egress_waiting",
                     account_email=account_email,
                     index=index,
                     total=total,
@@ -1715,6 +1724,8 @@ def _generate_single_image(
                         code=code,
                         account_email=account_email,
                         conversation_id=output.conversation_id,
+                        upstream_error=output.text or "",
+                        raw_upstream_message=output.text or "",
                     )
                 emitted_for_token = True
                 returned_message = output.kind == "message"
@@ -1805,14 +1816,38 @@ def _generate_single_image(
             account_service.mark_image_result(token, False)
             if account_email:
                 setattr(exc, "account_email", account_email)
+            raw_error = str(exc)
+            upstream_error = getattr(exc, "upstream_error", "") or getattr(exc, "last_task_error", "") or raw_error
             logger.warning({
                 "event": "image_poll_timeout",
                 "request_token": token,
                 "account_email": account_email,
                 "index": index,
                 "error": str(exc)[:200],
+                "upstream_error": str(upstream_error)[:1000] if upstream_error else "",
+                "last_conversation_snapshot": getattr(exc, "last_conversation_snapshot", None),
             })
-            raise
+            image_error = ImageGenerationError(
+                raw_error,
+                status_code=502,
+                error_type="server_error",
+                code="image_poll_timeout",
+                account_email=account_email,
+                conversation_id=getattr(exc, "conversation_id", ""),
+                raw_error=raw_error,
+                upstream_error=str(upstream_error or ""),
+                raw_upstream_message=str(getattr(exc, "last_assistant_text", "") or ""),
+            )
+            for attr in (
+                "poll_attempts",
+                "poll_timeout_secs",
+                "last_task_error",
+                "last_conversation_snapshot",
+                "last_assistant_text",
+            ):
+                if hasattr(exc, attr):
+                    setattr(image_error, attr, getattr(exc, attr))
+            raise image_error from exc
         except RequestCancelledError as exc:
             account_service.mark_image_result(token, False)
             if request.trace_image_perf:
@@ -1848,7 +1883,7 @@ def _generate_single_image(
                 "event": "image_stream_content_policy_error",
                 "request_token": token,
                 "account_email": account_email,
-                "error": str(exc),
+                "error": diagnostic_excerpt(exc, 1000),
                 "index": index,
             })
             raise ImageGenerationError(
@@ -1858,6 +1893,8 @@ def _generate_single_image(
                 code="content_policy_violation",
                 account_email=account_email,
                 conversation_id=getattr(exc, "conversation_id", ""),
+                upstream_error=str(exc),
+                raw_upstream_message=str(exc),
             ) from exc
         except ImageGenerationError as exc:
             account_service.mark_image_result(token, False)
@@ -1879,7 +1916,7 @@ def _generate_single_image(
                 "event": "image_stream_generation_error",
                 "request_token": token,
                 "account_email": account_email,
-                "error": error_text,
+                "error": diagnostic_excerpt(error_text, 1000),
                 "index": index,
             })
             raise
@@ -1904,7 +1941,7 @@ def _generate_single_image(
                 "event": "image_stream_fail",
                 "request_token": token,
                 "account_email": account_email,
-                "error": last_error,
+                "error": diagnostic_excerpt(last_error, 1000),
                 "stream_error_ms": stream_error_ms,
                 "index": index,
                 **http_timing,
@@ -1953,7 +1990,13 @@ def _generate_single_image(
                     )
                 continue
             account_service.mark_image_result(token, False)
-            raise ImageGenerationError(image_stream_error_message(last_error), account_email=account_email, conversation_id="") from exc
+            raise ImageGenerationError(
+                image_stream_error_message(last_error),
+                account_email=account_email,
+                conversation_id="",
+                raw_error=last_error,
+                upstream_error=last_error,
+            ) from exc
         finally:
             if egress_acquired and backend is not None:
                 proxy_settings.release_image_egress(backend.proxy_profile)
@@ -2044,7 +2087,12 @@ def stream_image_outputs_with_pool(request: ConversationRequest) -> Iterator[Ima
     if not emitted:
         if not last_error:
             last_error = "no account in the pool could generate images — check account quota and rate-limit status"
-        raise ImageGenerationError(image_stream_error_message(last_error), conversation_id="")
+        raise ImageGenerationError(
+            image_stream_error_message(last_error),
+            conversation_id="",
+            raw_error=last_error,
+            upstream_error=last_error,
+        )
 
 
 def _image_stream_payload(output: ImageOutput, event_type: str, payload: dict[str, Any]) -> dict[str, Any]:

@@ -19,6 +19,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from services.config import DATA_DIR
 from services.protocol.error_response import anthropic_error_response, openai_error_response
 from services.realtime_monitor_service import realtime_monitor_service
+from utils.diagnostics import diagnostic_excerpt
 from utils.helper import anthropic_sse_stream, image_sse_stream, sse_json_stream
 from utils.log import logger
 from utils.timezone import beijing_from_timestamp, beijing_now_str
@@ -507,6 +508,35 @@ def _request_excerpt(text: object, limit: int = 1000) -> str:
     return normalized[: limit - 1].rstrip() + "…"
 
 
+def _exception_log_fields(exc: Exception) -> dict[str, object]:
+    fields: dict[str, object] = {}
+    for attr, key in (
+        ("status_code", "status_code"),
+        ("code", "error_code"),
+        ("raw_error", "raw_error"),
+        ("upstream_error", "upstream_error"),
+        ("raw_upstream_message", "raw_upstream_message"),
+        ("upstream_message_preview", "upstream_message_preview"),
+        ("poll_attempts", "poll_attempts"),
+        ("poll_timeout_secs", "poll_timeout_secs"),
+        ("last_task_error", "last_task_error"),
+        ("last_conversation_snapshot", "last_conversation_snapshot"),
+    ):
+        if not hasattr(exc, attr):
+            continue
+        value = getattr(exc, attr)
+        if value in (None, ""):
+            continue
+        if isinstance(value, str):
+            value = diagnostic_excerpt(value, 4000)
+        fields[key] = value
+    if "raw_upstream_message" not in fields and hasattr(exc, "last_assistant_text"):
+        value = getattr(exc, "last_assistant_text")
+        if value not in (None, ""):
+            fields["raw_upstream_message"] = diagnostic_excerpt(value, 4000) if isinstance(value, str) else value
+    return fields
+
+
 def _image_error_response(exc: Exception) -> JSONResponse:
     from services.protocol.conversation import public_image_error_message
 
@@ -603,13 +633,14 @@ class LoggedCall:
             result = await run_in_threadpool(_call_handler)
         except ImageGenerationError as exc:
             self.log("调用失败", status="failed", error=str(exc), account_email=getattr(exc, "account_email", ""),
-                     conversation_id=getattr(exc, "conversation_id", ""))
+                     conversation_id=getattr(exc, "conversation_id", ""), extra=_exception_log_fields(exc))
             return _image_error_response(exc)
         except HTTPException as exc:
             self.log("调用失败", status="failed", error=str(exc.detail))
             raise
         except Exception as exc:
-            self.log("调用失败", status="failed", error=str(exc), account_email=getattr(exc, "account_email", ""))
+            self.log("调用失败", status="failed", error=str(exc), account_email=getattr(exc, "account_email", ""),
+                     extra=_exception_log_fields(exc))
             if self.endpoint.startswith("/v1/images"):
                 return _image_error_response(exc)
             return _protocol_error_response(exc, 502, sse)
@@ -657,13 +688,14 @@ class LoggedCall:
             has_first, first = await run_in_threadpool(_next_item_with_timing)
         except ImageGenerationError as exc:
             self.log("调用失败", status="failed", error=str(exc), account_email=getattr(exc, "account_email", ""),
-                     conversation_id=getattr(exc, "conversation_id", ""))
+                     conversation_id=getattr(exc, "conversation_id", ""), extra=_exception_log_fields(exc))
             return _image_error_response(exc)
         except HTTPException as exc:
             self.log("调用失败", status="failed", error=str(exc.detail))
             raise
         except Exception as exc:
-            self.log("调用失败", status="failed", error=str(exc), account_email=getattr(exc, "account_email", ""))
+            self.log("调用失败", status="failed", error=str(exc), account_email=getattr(exc, "account_email", ""),
+                     extra=_exception_log_fields(exc))
             if self.endpoint.startswith("/v1/images"):
                 return _image_error_response(exc)
             return _protocol_error_response(exc, 502, sse)
@@ -708,6 +740,7 @@ class LoggedCall:
                 urls=urls,
                 account_email=(account_emails[0] if account_emails else getattr(exc, "account_email", "")),
                 conversation_id=(conversation_ids[0] if conversation_ids else getattr(exc, "conversation_id", "")),
+                extra=_exception_log_fields(exc),
             )
             if self.endpoint.startswith("/v1/images") and not hasattr(exc, "to_openai_error"):
                 from services.protocol.conversation import ImageGenerationError, public_image_error_message
@@ -720,7 +753,8 @@ class LoggedCall:
                          conversation_id=conversation_ids[0] if conversation_ids else "")
 
     def log(self, suffix: str, result: object = None, status: str = "success", error: str = "",
-            urls: list[str] | None = None, account_email: str = "", conversation_id: str = "") -> None:
+            urls: list[str] | None = None, account_email: str = "", conversation_id: str = "",
+            extra: dict[str, object] | None = None) -> None:
         detail = {
             "key_id": self.identity.get("id"),
             "key_name": self.identity.get("name"),
@@ -742,6 +776,11 @@ class LoggedCall:
             detail["request_shape"] = self.request_shape
         if error:
             detail["error"] = error
+        if extra:
+            for key, value in extra.items():
+                if value in (None, ""):
+                    continue
+                detail[key] = value
         email = str(account_email or "").strip()
         if not email:
             emails = _collect_account_emails(result)

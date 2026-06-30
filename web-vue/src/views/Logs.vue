@@ -427,6 +427,12 @@
               @copy="copyText"
             />
             <DetailTextBlock
+              title="原始上游错误"
+              :content="selectedLog.rawUpstreamError"
+              tone="danger"
+              @copy="copyText"
+            />
+            <DetailTextBlock
               title="上游文本回复"
               :content="selectedLog.rawUpstreamMessage || selectedLog.upstreamPreview"
               tone="warning"

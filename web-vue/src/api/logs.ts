@@ -157,6 +157,7 @@ export type SystemLogRow = {
   blocked: string
   upstreamPreview: string
   rawUpstreamMessage: string
+  rawUpstreamError: string
   urls: string[]
   imageUrls: string[]
   diagnosisChips: LogDiagnosisChip[]
@@ -362,9 +363,14 @@ export function normalizeSystemLogRow(item: SystemLog, index: number, options: N
   const requestText = detailValue(detail, 'request_text')
   const rawUpstreamMessage = detailValue(detail, 'raw_upstream_message')
   const upstreamPreview = detailValue(detail, 'upstream_message_preview')
+  const duplicateDiagnosticValues = [error, rawUpstreamMessage, upstreamPreview].filter(Boolean)
+  const rawUpstreamError = [
+    detailValue(detail, 'upstream_error'),
+    detailValue(detail, 'raw_error'),
+  ].find((value) => value && !duplicateDiagnosticValues.includes(value)) || ''
   const reason = detailValue(detail, 'reason')
   const summary = cleanString(item.summary)
-  const preview = summarizeLogText(requestText || rawUpstreamMessage || upstreamPreview || error || reason || summary)
+  const preview = summarizeLogText(requestText || rawUpstreamMessage || upstreamPreview || error || rawUpstreamError || reason || summary)
   const urls = collectUrls(detail)
   const imageUrls = normalizePreviewUrls(urls, options.apiBaseUrl)
   const status = detailValue(detail, 'status')
@@ -425,6 +431,7 @@ export function normalizeSystemLogRow(item: SystemLog, index: number, options: N
     blocked,
     upstreamPreview,
     rawUpstreamMessage,
+    rawUpstreamError,
     urls,
     imageUrls,
     diagnosisChips: buildSystemLogDiagnosisChips({

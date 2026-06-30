@@ -25,6 +25,7 @@ from services.config import config
 from services.protocol.reasoning import normalize_thinking_effort
 from services.proxy_service import ProxyRuntimeProfile, proxy_settings
 from utils.helper import UpstreamHTTPError, ensure_ok, iter_sse_payloads, new_uuid, split_image_model
+from utils.diagnostics import diagnostic_excerpt
 from utils.log import logger
 from utils.pow import build_legacy_requirements_token, build_proof_token, parse_pow_resources
 from utils.turnstile import solve_turnstile_token
@@ -364,6 +365,7 @@ class OpenAIBackendAPI:
         first_event_ms = 0
         event_count = 0
         max_gap_ms = 0
+        last_payload_preview = ""
         try:
             for payload in iter_sse_payloads(
                 response,
@@ -377,6 +379,7 @@ class OpenAIBackendAPI:
                 max_gap_ms = max(max_gap_ms, gap_ms)
                 last_event_at = now
                 event_count += 1
+                last_payload_preview = diagnostic_excerpt(payload, 1000)
                 yield payload
         finally:
             ended = time.perf_counter()
@@ -391,6 +394,8 @@ class OpenAIBackendAPI:
             }
             if first_event_ms > 0:
                 data["sse_first_event_ms"] = first_event_ms
+            if last_payload_preview:
+                data["sse_last_payload_preview"] = last_payload_preview
             self._merge_http_timing(timing_key, data)
 
     @staticmethod
@@ -1238,7 +1243,7 @@ class OpenAIBackendAPI:
             data = response.json()
             return data.get("items") or data.get("conversations") or []
         except Exception as exc:
-            logger.debug({"event": "list_conversations_failed", "error": str(exc)})
+            logger.debug({"event": "list_conversations_failed", "error": diagnostic_excerpt(exc, 300)})
             return []
 
     def find_conversation_by_prompt(self, prompt: str, started_at: float, timeout_secs: float = 10.0) -> str:
@@ -2219,7 +2224,8 @@ class OpenAIBackendAPI:
 
     def _extract_image_tool_records(self, data: Dict[str, Any]) -> list[Dict[str, Any]]:
         """从 conversation 明细里提取图片工具输出记录。"""
-        mapping = data.get("mapping") or {}
+        mapping_value = data.get("mapping") or {}
+        mapping = mapping_value if isinstance(mapping_value, dict) else {}
         records = []
         for message_id, node in mapping.items():
             message = (node or {}).get("message") or {}
@@ -2249,7 +2255,8 @@ class OpenAIBackendAPI:
         本方法遍历所有 assistant/tool 消息，检查是否包含内容政策违规关键词，
         如果匹配则返回该消息文本（截断至 500 字符），否则返回空字符串。
         """
-        mapping = data.get("mapping") or {}
+        mapping_value = data.get("mapping") or {}
+        mapping = mapping_value if isinstance(mapping_value, dict) else {}
         for node in mapping.values():
             message = (node or {}).get("message") or {}
             author = message.get("author") or {}
@@ -2274,6 +2281,51 @@ class OpenAIBackendAPI:
             if msg_text and _is_content_policy_error(msg_text):
                 return msg_text[:500]
         return ""
+
+    def _conversation_poll_snapshot(self, data: Dict[str, Any]) -> tuple[Dict[str, Any], str]:
+        """Small last-state snapshot for poll timeout diagnostics."""
+        mapping_value = data.get("mapping") or {}
+        mapping = mapping_value if isinstance(mapping_value, dict) else {}
+        messages: list[Dict[str, Any]] = []
+        latest_assistant: tuple[float, str] = (0.0, "")
+        for message_id, node in mapping.items():
+            message = (node or {}).get("message") or {}
+            if not isinstance(message, dict):
+                continue
+            author = message.get("author") or {}
+            metadata = message.get("metadata") or {}
+            content = message.get("content") or {}
+            role = str(author.get("role") or "").strip().lower()
+            if role not in {"user", "assistant", "tool", "system"}:
+                continue
+            create_time = float(message.get("create_time") or 0.0)
+            text = self._editable_message_text(message)
+            file_ids, sediment_ids = self._extract_image_reference_ids({"content": content, "metadata": metadata})
+            item: Dict[str, Any] = {
+                "message_id": str(message.get("id") or message_id or "")[:80],
+                "role": role,
+                "create_time": create_time,
+                "content_type": str(content.get("content_type") or "") if isinstance(content, dict) else type(content).__name__,
+            }
+            for key in ("async_task_type", "status", "message_type", "model_slug"):
+                value = metadata.get(key) if isinstance(metadata, dict) else None
+                if value not in (None, ""):
+                    item[key] = value
+            if file_ids:
+                item["file_ids"] = file_ids[:5]
+            if sediment_ids:
+                item["sediment_ids"] = sediment_ids[:5]
+            if text:
+                item["text_preview"] = diagnostic_excerpt(text, 500)
+                if role == "assistant" and create_time >= latest_assistant[0]:
+                    latest_assistant = (create_time, text)
+            messages.append(item)
+        messages.sort(key=lambda item: float(item.get("create_time") or 0.0))
+        snapshot = {
+            "mapping_count": len(mapping) if isinstance(mapping, dict) else 0,
+            "messages": messages[-8:],
+        }
+        return snapshot, diagnostic_excerpt(latest_assistant[1], 2000)
 
     def _poll_image_results(
             self,
@@ -2352,6 +2404,8 @@ class OpenAIBackendAPI:
             return True
 
         last_task_error = ""
+        last_conversation_snapshot: Dict[str, Any] = {}
+        last_assistant_text = ""
         while _remaining() > 0:
             attempt += 1
             # 在每次轮询时，检查 /backend-api/tasks/ 是否有错误（仅记录，不中断）
@@ -2376,7 +2430,7 @@ class OpenAIBackendAPI:
                     "event": "image_poll_task_check_failed",
                     "conversation_id": conversation_id,
                     "attempt": attempt,
-                    "error": str(exc),
+                    "error": diagnostic_excerpt(exc, 300),
                 })
 
             try:
@@ -2391,6 +2445,7 @@ class OpenAIBackendAPI:
                 if _retry_sleep("network", None, str(exc), None):
                     continue
                 break
+            last_conversation_snapshot, last_assistant_text = self._conversation_poll_snapshot(conversation)
 
             for record in self._extract_image_tool_records(conversation):
                 for file_id in record["file_ids"]:
@@ -2455,6 +2510,8 @@ class OpenAIBackendAPI:
             # attempts_made == 0 means the initial_wait consumed the entire budget — no HTTP attempted.
             "initial_wait_exhausted_budget": attempt == 0,
             "last_task_error": last_task_error if last_task_error else None,
+            "last_assistant_text": last_assistant_text or None,
+            "last_conversation_snapshot": last_conversation_snapshot or None,
         })
         exc = ImagePollTimeoutError(
             f"ChatGPT 生图超时（已等待 {timeout_secs} 秒）。"
@@ -2463,7 +2520,14 @@ class OpenAIBackendAPI:
         )
         if last_task_error:
             setattr(exc, "task_error", last_task_error)
+            setattr(exc, "last_task_error", last_task_error)
         setattr(exc, "conversation_id", conversation_id or "")
+        setattr(exc, "poll_attempts", attempt)
+        setattr(exc, "poll_timeout_secs", timeout_secs)
+        setattr(exc, "last_assistant_text", last_assistant_text or "")
+        setattr(exc, "last_conversation_snapshot", last_conversation_snapshot or {})
+        if last_task_error:
+            setattr(exc, "upstream_error", last_task_error)
         raise exc
 
     def _get_file_download_url(self, file_id: str) -> str:
@@ -2577,7 +2641,7 @@ class OpenAIBackendAPI:
                     "source": "file",
                     "conversation_id": conversation_id,
                     "id": file_id,
-                    "error": repr(exc),
+                    "error": diagnostic_excerpt(repr(exc), 300),
                 })
                 continue
             if url:
@@ -2608,7 +2672,7 @@ class OpenAIBackendAPI:
                     "source": "sediment",
                     "conversation_id": conversation_id,
                     "id": sediment_id,
-                    "error": repr(exc),
+                    "error": diagnostic_excerpt(repr(exc), 300),
                 })
                 continue
             if url:
@@ -2689,7 +2753,7 @@ class OpenAIBackendAPI:
                     "conversation_id": conversation_id,
                     "file_ids": file_ids,
                     "sediment_ids": sediment_ids,
-                    "error": repr(exc),
+                    "error": diagnostic_excerpt(repr(exc), 300),
                 })
             else:
                 file_ids.extend(item for item in polled_file_ids if item and item not in file_ids)
