@@ -267,6 +267,18 @@ def response_completed(
     return response
 
 
+def _with_log_metadata(payload: dict[str, Any], account_email: str = "", conversation_id: str = "") -> dict[str, Any]:
+    if account_email:
+        payload["_account_email"] = account_email
+    if conversation_id:
+        payload["_conversation_id"] = conversation_id
+    return payload
+
+
+def _backend_account_email(backend: object) -> str:
+    return str(getattr(backend, "account_email", "") or "").strip()
+
+
 def text_response_parts(body: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
     model = str(body.get("model") or "auto").strip() or "auto"
     messages = normalize_text_messages(normalize_messages(messages_from_input(body.get("input"), body.get("instructions"))))
@@ -288,16 +300,25 @@ def stream_text_response(backend, body: dict[str, Any], messages: list[dict[str,
     request = ConversationRequest(model=model, messages=messages, thinking_effort=thinking_effort)
     for delta in stream_text_deltas(backend, request):
         full_text += delta
-        yield {"type": "response.output_text.delta", "item_id": item_id, "output_index": 0, "content_index": 0, "delta": delta}
-    yield {"type": "response.output_text.done", "item_id": item_id, "output_index": 0, "content_index": 0, "text": full_text}
+        yield _with_log_metadata(
+            {"type": "response.output_text.delta", "item_id": item_id, "output_index": 0, "content_index": 0, "delta": delta},
+            _backend_account_email(backend),
+        )
+    yield _with_log_metadata(
+        {"type": "response.output_text.done", "item_id": item_id, "output_index": 0, "content_index": 0, "text": full_text},
+        _backend_account_email(backend),
+    )
     item = text_output_item(full_text, item_id, "completed")
-    yield {"type": "response.output_item.done", "output_index": 0, "item": item}
+    yield _with_log_metadata({"type": "response.output_item.done", "output_index": 0, "item": item}, _backend_account_email(backend))
     usage = token_usage(
         input_text_tokens=count_message_text_tokens(messages, model),
         input_image_tokens=count_message_image_tokens(messages, model),
         output_text_tokens=count_text_tokens(full_text, model),
     )
-    yield response_completed(response_id, model, created, [item], usage)
+    completed = response_completed(response_id, model, created, [item], usage)
+    _with_log_metadata(completed, _backend_account_email(backend))
+    _with_log_metadata(completed["response"], _backend_account_email(backend))
+    yield completed
 
 
 def stream_web_search_response(body: dict[str, Any], messages: list[dict[str, Any]] | None = None) -> Iterator[dict[str, Any]]:
@@ -358,10 +379,25 @@ def stream_image_response(
                 input_image_tokens=input_image_tokens,
                 output_text_tokens=count_text_tokens(text, model),
             )
-            yield {"type": "response.output_text.delta", "item_id": item["id"], "output_index": 0, "content_index": 0, "delta": text}
-            yield {"type": "response.output_text.done", "item_id": item["id"], "output_index": 0, "content_index": 0, "text": text}
-            yield {"type": "response.output_item.done", "output_index": 0, "item": item}
-            yield response_completed(response_id, model, created, [item], usage)
+            yield _with_log_metadata(
+                {"type": "response.output_text.delta", "item_id": item["id"], "output_index": 0, "content_index": 0, "delta": text},
+                output.account_email,
+                output.conversation_id,
+            )
+            yield _with_log_metadata(
+                {"type": "response.output_text.done", "item_id": item["id"], "output_index": 0, "content_index": 0, "text": text},
+                output.account_email,
+                output.conversation_id,
+            )
+            yield _with_log_metadata(
+                {"type": "response.output_item.done", "output_index": 0, "item": item},
+                output.account_email,
+                output.conversation_id,
+            )
+            completed = response_completed(response_id, model, created, [item], usage)
+            _with_log_metadata(completed, output.account_email, output.conversation_id)
+            _with_log_metadata(completed["response"], output.account_email, output.conversation_id)
+            yield completed
             return
         if output.kind != "result":
             continue
@@ -373,8 +409,15 @@ def stream_image_response(
                 output_tokens=count_image_output_items_tokens(output.data, size, quality),
             )
             for output_index, item in enumerate(items):
-                yield {"type": "response.output_item.done", "output_index": output_index, "item": item}
-            yield response_completed(response_id, model, created, items, usage)
+                yield _with_log_metadata(
+                    {"type": "response.output_item.done", "output_index": output_index, "item": item},
+                    output.account_email,
+                    output.conversation_id,
+                )
+            completed = response_completed(response_id, model, created, items, usage)
+            _with_log_metadata(completed, output.account_email, output.conversation_id)
+            _with_log_metadata(completed["response"], output.account_email, output.conversation_id)
+            yield completed
             return
     raise RuntimeError("image generation failed")
 

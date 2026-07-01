@@ -1383,8 +1383,17 @@ async function copyTaskError(task: ImageTask) {
     error_code: task.error_code,
     reason: task.reason,
     error: task.error,
+    raw_error: task.raw_error,
+    upstream_error: task.upstream_error,
+    upstream_error_type: task.upstream_error_type,
+    upstream_request_id: task.upstream_request_id,
     conversation_id: task.conversation_id,
     raw_upstream_message: task.raw_upstream_message,
+    upstream_message_preview: task.upstream_message_preview,
+    poll_attempts: task.poll_attempts,
+    poll_timeout_secs: task.poll_timeout_secs,
+    stream_timeout_secs: task.stream_timeout_secs,
+    last_task_error: task.last_task_error,
     diagnosis: task.diagnosis,
   }
   await copyText(JSON.stringify(payload, null, 2))

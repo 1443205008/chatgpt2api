@@ -737,7 +737,6 @@ const logMeta = reactive<SystemLogsResponse>({
     failed: 0,
     limited: 0,
     image: 0,
-    textReply: 0,
   },
 })
 
@@ -859,7 +858,6 @@ const systemMetricItems = computed(() => [
   { label: '失败', value: logStats.value.failed, class: 'text-rose-600' },
   { label: '限流', value: logStats.value.limited, class: 'text-amber-600' },
   { label: '图片接口', value: logStats.value.image, class: 'text-cyan-600' },
-  { label: '文本无图', value: logStats.value.textReply, class: 'text-violet-600' },
 ])
 
 const runtimeMetricItems = computed(() => [
@@ -906,7 +904,6 @@ const systemQuickFilterOptions: GroupedSelectOption[] = [
   { label: '只看失败', value: 'quick:status:failed' },
   { label: '图生图', value: 'quick:endpoint:/v1/images/edits' },
   { label: '文生图', value: 'quick:endpoint:/v1/images/generations' },
-  { label: '文本回复无图', value: 'quick:error:upstream_text_reply' },
 ]
 const systemQuickFilterGroups: GroupedSelectGroup[] = [
   { options: systemQuickFilterOptions },
@@ -916,7 +913,6 @@ const systemQuickFilterSelection = computed(() => {
   if (filters.status === 'failed') values.push('quick:status:failed')
   if (filters.endpoint === '/v1/images/edits') values.push('quick:endpoint:/v1/images/edits')
   if (filters.endpoint === '/v1/images/generations') values.push('quick:endpoint:/v1/images/generations')
-  if (filters.search === 'upstream_text_reply') values.push('quick:error:upstream_text_reply')
   return values
 })
 
@@ -1220,7 +1216,6 @@ function summaryText(item: LogRow): string {
 }
 
 function statusLabel(item: LogRow): string {
-  if (item.errorCode === 'upstream_text_reply' || item.status.toLowerCase() === 'text_reply') return '未出图'
   if (isSuccess(item)) return '成功'
   if (isFailed(item)) return '失败'
   if (isLimited(item)) return '受限'
@@ -1228,7 +1223,6 @@ function statusLabel(item: LogRow): string {
 }
 
 function statusTone(item: LogRow): 'success' | 'danger' | 'warning' | 'muted' {
-  if (item.errorCode === 'upstream_text_reply' || item.status.toLowerCase() === 'text_reply') return 'warning'
   if (isSuccess(item)) return 'success'
   if (isFailed(item)) return 'danger'
   if (isLimited(item)) return 'warning'
@@ -1602,19 +1596,12 @@ function latestQuickEndpointValue(values: string[]): string | null {
 function updateSystemQuickFilters(value: string | string[]) {
   const values = Array.isArray(value) ? value : value ? [value] : []
   const hasFailedFilter = values.includes('quick:status:failed')
-  const hasTextReplyFilter = values.includes('quick:error:upstream_text_reply')
   const endpoint = latestQuickEndpointValue(values)
 
-  if (hasFailedFilter || hasTextReplyFilter) {
+  if (hasFailedFilter) {
     filters.status = 'failed'
   } else if (filters.status === 'failed') {
     filters.status = ''
-  }
-
-  if (hasTextReplyFilter) {
-    filters.search = 'upstream_text_reply'
-  } else if (filters.search === 'upstream_text_reply') {
-    filters.search = ''
   }
 
   if (endpoint) {

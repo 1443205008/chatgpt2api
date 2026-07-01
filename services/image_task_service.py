@@ -14,6 +14,7 @@ from services.json_file import read_json_file, write_json_file
 from services.log_service import LOG_TYPE_CALL, log_service
 from services.protocol import openai_v1_image_edit, openai_v1_image_generations
 from services.realtime_monitor_service import realtime_monitor_service
+from utils.diagnostics import exception_diagnostic_fields
 from utils.timezone import beijing_from_timestamp, beijing_now_str
 
 TASK_STATUS_QUEUED = "queued"
@@ -22,6 +23,44 @@ TASK_STATUS_SUCCESS = "success"
 TASK_STATUS_ERROR = "error"
 TERMINAL_STATUSES = {TASK_STATUS_SUCCESS, TASK_STATUS_ERROR}
 UNFINISHED_STATUSES = {TASK_STATUS_QUEUED, TASK_STATUS_RUNNING}
+TASK_DETAIL_KEYS = (
+    "error_code",
+    "raw_error",
+    "upstream_error",
+    "upstream_error_type",
+    "upstream_request_id",
+    "can_resume_poll",
+    "raw_upstream_message",
+    "raw_upstream_message_len",
+    "raw_upstream_message_truncated",
+    "upstream_message_preview",
+    "upstream_message_len",
+    "upstream_message_truncated",
+    "tool_invoked",
+    "terminal_message",
+    "blocked",
+    "diagnosis",
+    "poll_attempts",
+    "poll_timeout_secs",
+    "stream_timeout_secs",
+    "last_task_error",
+)
+
+
+def _copy_task_details(source: dict[str, Any], target: dict[str, Any]) -> None:
+    for key in TASK_DETAIL_KEYS:
+        value = source.get(key)
+        if value in (None, ""):
+            continue
+        target[key] = value
+
+
+def _task_detail_fields(fields: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in fields.items() if key in TASK_DETAIL_KEYS}
+
+
+def _clear_task_details() -> dict[str, str]:
+    return {key: "" for key in TASK_DETAIL_KEYS}
 
 
 def _now_iso() -> str:
@@ -92,6 +131,7 @@ def _public_task(task: dict[str, Any]) -> dict[str, Any]:
         item["usage"] = task.get("usage")
     if task.get("error"):
         item["error"] = task.get("error")
+    _copy_task_details(task, item)
     if task.get("progress"):
         item["progress"] = task.get("progress")
     if task.get("duration_ms") is not None:
@@ -316,7 +356,15 @@ class ImageTaskService:
                 raise error
             usage = result.get("usage")
             duration_ms = int((time.time() - started) * 1000)
-            self._update_task(key, status=TASK_STATUS_SUCCESS, data=data, usage=usage, error="", duration_ms=duration_ms)
+            self._update_task(
+                key,
+                status=TASK_STATUS_SUCCESS,
+                data=data,
+                usage=usage,
+                error="",
+                duration_ms=duration_ms,
+                **_clear_task_details(),
+            )
             self._log_call(
                 identity,
                 mode,
@@ -334,10 +382,12 @@ class ImageTaskService:
             error_message = str(exc) or "image task failed"
             account_email = _clean(getattr(exc, "account_email", ""))
             conversation_id = _clean(getattr(exc, "conversation_id", ""))
+            error_details = exception_diagnostic_fields(exc)
             duration_ms = int((time.time() - started) * 1000)
             self._update_task(key, status=TASK_STATUS_ERROR, error=error_message, data=[],
                               duration_ms=duration_ms,
-                              **({"conversation_id": conversation_id} if conversation_id else {}))
+                              **({"conversation_id": conversation_id} if conversation_id else {}),
+                              **_task_detail_fields(error_details))
             self._log_call(
                 identity,
                 mode,
@@ -351,6 +401,7 @@ class ImageTaskService:
                 conversation_id=conversation_id,
                 call_id=call_id,
                 perf=perf_timings,
+                extra=error_details,
             )
 
     def _log_call(
@@ -369,6 +420,7 @@ class ImageTaskService:
         conversation_id: str = "",
         call_id: str = "",
         perf: dict[str, int] | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> None:
         endpoint = "/v1/images/edits" if mode == "edit" else "/v1/images/generations"
         summary_prefix = "图生图" if mode == "edit" else "文生图"
@@ -390,6 +442,11 @@ class ImageTaskService:
             detail["request_text"] = request_preview
         if error:
             detail["error"] = error
+        if extra:
+            for key, value in extra.items():
+                if value in (None, ""):
+                    continue
+                detail[key] = value
         if account_email:
             detail["account_email"] = account_email
         if conversation_id:
@@ -408,7 +465,11 @@ class ImageTaskService:
             task = self._tasks.get(key)
             if task is None:
                 return
-            task.update(updates)
+            for field, value in updates.items():
+                if field in TASK_DETAIL_KEYS and value in (None, ""):
+                    task.pop(field, None)
+                    continue
+                task[field] = value
             task["updated_at"] = _now_iso()
             task["updated_ts"] = time.time()
             self._save_locked()
@@ -459,6 +520,7 @@ class ImageTaskService:
             error = _clean(item.get("error"))
             if error:
                 task["error"] = error
+            _copy_task_details(item, task)
             tasks[_task_key(owner, task_id)] = task
         return tasks
 
@@ -515,7 +577,7 @@ class ImageTaskService:
             mode = task.get("mode", "generate")
             model = task.get("model", "gpt-image-2")
             # 将任务状态重置为 running
-            self._update_task(key, status=TASK_STATUS_RUNNING, error="")
+            self._update_task(key, status=TASK_STATUS_RUNNING, error="", **_clear_task_details())
 
         # 启动新线程继续轮询
         thread = threading.Thread(
@@ -574,7 +636,14 @@ class ImageTaskService:
                 "",
                 int(time.time()),
             )["data"]
-            self._update_task(key, status=TASK_STATUS_SUCCESS, data=data, error="", duration_ms=int((time.time() - started) * 1000))
+            self._update_task(
+                key,
+                status=TASK_STATUS_SUCCESS,
+                data=data,
+                error="",
+                duration_ms=int((time.time() - started) * 1000),
+                **_clear_task_details(),
+            )
             self._log_call(
                 identity,
                 mode,
@@ -586,8 +655,16 @@ class ImageTaskService:
             )
         except Exception as exc:
             error_message = str(exc) or "resume poll failed"
+            error_details = exception_diagnostic_fields(exc)
             duration_ms = int((time.time() - started) * 1000)
-            self._update_task(key, status=TASK_STATUS_ERROR, error=error_message, data=[], duration_ms=duration_ms)
+            self._update_task(
+                key,
+                status=TASK_STATUS_ERROR,
+                error=error_message,
+                data=[],
+                duration_ms=duration_ms,
+                **_task_detail_fields(error_details),
+            )
             self._log_call(
                 identity,
                 mode,
@@ -596,6 +673,7 @@ class ImageTaskService:
                 "调用失败（续轮询）",
                 status="failed",
                 error=error_message,
+                extra=error_details,
             )
 
 

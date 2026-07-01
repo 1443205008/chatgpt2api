@@ -30,6 +30,8 @@ export interface ImageTask {
   usage?: Record<string, unknown>
   error?: string
   error_code?: string
+  raw_error?: string
+  upstream_error?: string
   reason?: string
   upstream_error_type?: string
   upstream_request_id?: string
@@ -44,6 +46,10 @@ export interface ImageTask {
   terminal_message?: string
   blocked?: boolean
   diagnosis?: Record<string, unknown>
+  poll_attempts?: number
+  poll_timeout_secs?: number
+  stream_timeout_secs?: number
+  last_task_error?: string
 }
 
 export interface ImageTasksResponse {
@@ -237,6 +243,8 @@ function normalizeTask(raw: Partial<ImageTask>): ImageTask {
     usage: raw.usage && typeof raw.usage === 'object' ? raw.usage : undefined,
     error: cleanString(raw.error),
     error_code: cleanString(raw.error_code),
+    raw_error: cleanString(raw.raw_error),
+    upstream_error: cleanString(raw.upstream_error),
     reason: cleanString(raw.reason),
     upstream_error_type: cleanString(raw.upstream_error_type),
     upstream_request_id: cleanString(raw.upstream_request_id),
@@ -255,6 +263,10 @@ function normalizeTask(raw: Partial<ImageTask>): ImageTask {
     terminal_message: cleanString(raw.terminal_message),
     blocked: typeof raw.blocked === 'boolean' ? raw.blocked : undefined,
     diagnosis: raw.diagnosis && typeof raw.diagnosis === 'object' ? raw.diagnosis : undefined,
+    poll_attempts: Number.isFinite(Number(raw.poll_attempts)) ? Number(raw.poll_attempts) : undefined,
+    poll_timeout_secs: Number.isFinite(Number(raw.poll_timeout_secs)) ? Number(raw.poll_timeout_secs) : undefined,
+    stream_timeout_secs: Number.isFinite(Number(raw.stream_timeout_secs)) ? Number(raw.stream_timeout_secs) : undefined,
+    last_task_error: cleanString(raw.last_task_error),
   }
 }
 
@@ -325,12 +337,40 @@ export function isImageTaskTerminal(task: ImageTask) {
   return task.status === 'success' || task.status === 'error'
 }
 
-export function taskPrimaryMessage(task: ImageTask) {
+export const IMAGE_TASK_PROGRESS_LABELS: Record<string, string> = {
+  queued: '排队中',
+  running: '生成中',
+  getting_account: '等待账号',
+  image_egress_waiting: '等待出口',
+  image_egress_ready: '出口就绪',
+  uploading: '上传中',
+  bootstrapping: '初始化',
+  getting_token: '获取令牌',
+  preparing_conversation: '准备会话',
+  starting_generation: '启动生成',
+  generating: '上游生成中',
+  image_stream_resolve_start: '解析结果',
+  receiving_image: '接收图片',
+}
+
+export function imageTaskProgressLabel(task?: ImageTask | null) {
+  const key = cleanString(task?.progress || task?.stage || task?.status)
+  return IMAGE_TASK_PROGRESS_LABELS[key] || '生成中'
+}
+
+export function taskPrimaryMessage(task?: ImageTask | null) {
+  if (!task) return ''
   if (task.upstream_request_id) {
     const base = task.reason || task.error || '上游图片工具返回错误'
     return `${base}（request_id: ${task.upstream_request_id}）`
   }
-  return task.reason || task.error || task.upstream_message_preview || task.terminal_message || ''
+  return task.reason
+    || task.error
+    || task.upstream_message_preview
+    || task.terminal_message
+    || task.upstream_error
+    || task.raw_error
+    || ''
 }
 
 export function imageAssetUrl(asset: ImageTaskAsset) {

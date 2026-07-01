@@ -19,7 +19,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from services.config import DATA_DIR
 from services.protocol.error_response import anthropic_error_response, openai_error_response
 from services.realtime_monitor_service import realtime_monitor_service
-from utils.diagnostics import diagnostic_excerpt
+from utils.diagnostics import exception_diagnostic_fields
 from utils.helper import anthropic_sse_stream, image_sse_stream, sse_json_stream
 from utils.log import logger
 from utils.timezone import beijing_from_timestamp, beijing_now_str
@@ -103,8 +103,6 @@ class LogService:
     @classmethod
     def _is_failed(cls, item: dict[str, Any]) -> bool:
         status = cls._clean(cls._detail_value(item, "status")).lower()
-        if cls._clean(cls._detail_value(item, "error_code")) == "upstream_text_reply":
-            return False
         return status in {"failed", "error", "fail"} or bool(
             cls._detail_value(item, "error") or cls._detail_value(item, "error_code")
         )
@@ -122,12 +120,6 @@ class LogService:
         endpoint = cls._clean(cls._detail_value(item, "endpoint")).lower()
         model = cls._clean(cls._detail_value(item, "model")).lower()
         return "/images/" in endpoint or ("/v1/chat" in endpoint and "image" in model)
-
-    @classmethod
-    def _is_text_reply(cls, item: dict[str, Any]) -> bool:
-        return cls._clean(cls._detail_value(item, "error_code")) == "upstream_text_reply" or bool(
-            cls._detail_value(item, "raw_upstream_message")
-        )
 
     @classmethod
     def _matches_extended_filters(
@@ -336,8 +328,6 @@ class LogService:
                 stats["limited"] += 1
             if self._is_image_log(item):
                 stats["image"] += 1
-            if self._is_text_reply(item):
-                stats["text_reply"] += 1
 
             if total <= safe_offset:
                 continue
@@ -362,7 +352,6 @@ class LogService:
                 "failed": int(stats["failed"]),
                 "limited": int(stats["limited"]),
                 "image": int(stats["image"]),
-                "text_reply": int(stats["text_reply"]),
             },
         }
 
@@ -511,39 +500,7 @@ def _request_excerpt(text: object, limit: int = 1000) -> str:
 
 
 def _exception_log_fields(exc: Exception) -> dict[str, object]:
-    fields: dict[str, object] = {}
-    for attr, key in (
-        ("status_code", "status_code"),
-        ("code", "error_code"),
-        ("raw_error", "raw_error"),
-        ("upstream_error", "upstream_error"),
-        ("raw_upstream_message", "raw_upstream_message"),
-        ("upstream_message_preview", "upstream_message_preview"),
-        ("poll_attempts", "poll_attempts"),
-        ("poll_timeout_secs", "poll_timeout_secs"),
-        ("stream_timeout_secs", "stream_timeout_secs"),
-        ("stream_timeout_followup", "stream_timeout_followup"),
-        ("last_task_error", "last_task_error"),
-        ("last_conversation_snapshot", "last_conversation_snapshot"),
-    ):
-        if not hasattr(exc, attr):
-            continue
-        value = getattr(exc, attr)
-        if value in (None, ""):
-            continue
-        if isinstance(value, str):
-            value = diagnostic_excerpt(value, 4000)
-        fields[key] = value
-    if "raw_upstream_message" not in fields and hasattr(exc, "last_assistant_text"):
-        value = getattr(exc, "last_assistant_text")
-        if value not in (None, ""):
-            fields["raw_upstream_message"] = diagnostic_excerpt(value, 4000) if isinstance(value, str) else value
-    return fields
-
-
-def _is_upstream_text_reply_exception(exc: Exception) -> bool:
-    return str(getattr(exc, "code", "") or "").strip() == "upstream_text_reply"
-
+    return exception_diagnostic_fields(exc, include_status_code=True)
 
 def _image_error_response(exc: Exception) -> JSONResponse:
     from services.protocol.conversation import public_image_error_message
@@ -640,12 +597,8 @@ class LoggedCall:
         try:
             result = await run_in_threadpool(_call_handler)
         except ImageGenerationError as exc:
-            if _is_upstream_text_reply_exception(exc):
-                self.log("未出图", status="text_reply", account_email=getattr(exc, "account_email", ""),
-                         conversation_id=getattr(exc, "conversation_id", ""), extra=_exception_log_fields(exc))
-            else:
-                self.log("调用失败", status="failed", error=str(exc), account_email=getattr(exc, "account_email", ""),
-                         conversation_id=getattr(exc, "conversation_id", ""), extra=_exception_log_fields(exc))
+            self.log("调用失败", status="failed", error=str(exc), account_email=getattr(exc, "account_email", ""),
+                     conversation_id=getattr(exc, "conversation_id", ""), extra=_exception_log_fields(exc))
             return _image_error_response(exc)
         except HTTPException as exc:
             self.log("调用失败", status="failed", error=str(exc.detail))
@@ -659,10 +612,7 @@ class LoggedCall:
 
         if isinstance(result, dict):
             self.log("调用完成", result)
-            response = dict(result)
-            response.pop("_account_email", None)
-            response.pop("_call_id", None)
-            return response
+            return _strip_internal_response_fields(result)
 
         if self.endpoint.startswith("/v1/images"):
             sender = image_sse_stream
@@ -699,12 +649,8 @@ class LoggedCall:
         try:
             has_first, first = await run_in_threadpool(_next_item_with_timing)
         except ImageGenerationError as exc:
-            if _is_upstream_text_reply_exception(exc):
-                self.log("未出图", status="text_reply", account_email=getattr(exc, "account_email", ""),
-                         conversation_id=getattr(exc, "conversation_id", ""), extra=_exception_log_fields(exc))
-            else:
-                self.log("调用失败", status="failed", error=str(exc), account_email=getattr(exc, "account_email", ""),
-                         conversation_id=getattr(exc, "conversation_id", ""), extra=_exception_log_fields(exc))
+            self.log("调用失败", status="failed", error=str(exc), account_email=getattr(exc, "account_email", ""),
+                     conversation_id=getattr(exc, "conversation_id", ""), extra=_exception_log_fields(exc))
             return _image_error_response(exc)
         except HTTPException as exc:
             self.log("调用失败", status="failed", error=str(exc.detail))
@@ -749,11 +695,10 @@ class LoggedCall:
                 yield _strip_internal_response_fields(item)
         except Exception as exc:
             failed = True
-            text_reply = _is_upstream_text_reply_exception(exc)
             self.log(
-                "流式未出图" if text_reply else "流式调用失败",
-                status="text_reply" if text_reply else "failed",
-                error="" if text_reply else str(exc),
+                "流式调用失败",
+                status="failed",
+                error=str(exc),
                 urls=urls,
                 account_email=(account_emails[0] if account_emails else getattr(exc, "account_email", "")),
                 conversation_id=(conversation_ids[0] if conversation_ids else getattr(exc, "conversation_id", "")),

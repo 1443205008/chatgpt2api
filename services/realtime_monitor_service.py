@@ -103,7 +103,7 @@ ACTIVE_STAGE_GROUPS = {
     "image_stream_resolve_start": "解析/轮询",
     "image_resolve_done": "解析/轮询",
     "image_resolve_failed": "解析/轮询",
-    "image_text_reply": "未出图",
+    "image_text_reply": "上游文本回复",
     "image_download_done": "下载图片",
     "image_download_failed": "下载图片",
     "image_retry_wait": "重试等待",

@@ -29,6 +29,7 @@ CACHEABLE_TEXT_KEYS = {
     "thinking_effort",
     "user",
 }
+INTERNAL_RESPONSE_KEYS = {"_account_email", "_conversation_id", "_call_id", "_image_urls"}
 
 
 @dataclass
@@ -95,6 +96,18 @@ def normalize_text_messages(messages: list[dict[str, Any]]) -> list[dict[str, An
         normalized.append(message)
         previous_signature = signature
     return normalized
+
+
+def _strip_internal_response_fields(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _strip_internal_response_fields(item)
+            for key, item in value.items()
+            if key not in INTERNAL_RESPONSE_KEYS
+        }
+    if isinstance(value, list):
+        return [_strip_internal_response_fields(item) for item in value]
+    return value
 
 
 class ChatCompletionCache:
@@ -165,11 +178,12 @@ class ChatCompletionCache:
 
         expires_at = time.time() + int(settings.get("ttl_seconds") or 0)
         with self._lock:
-            self._entries[key] = CacheEntry(expires_at=expires_at, value=self._copy(value))
+            cached_value = _strip_internal_response_fields(value)
+            self._entries[key] = CacheEntry(expires_at=expires_at, value=self._copy(cached_value))
             self._prune_locked(time.time(), max_entries)
             self._inflight.pop(key, None)
         with inflight.condition:
-            inflight.value = self._copy(value)
+            inflight.value = self._copy(cached_value)
             inflight.done = True
             inflight.condition.notify_all()
         return value
@@ -213,7 +227,7 @@ class ChatCompletionCache:
         chunks: list[dict[str, Any]] = []
         try:
             for chunk in compute():
-                chunks.append(self._copy(chunk))
+                chunks.append(_strip_internal_response_fields(chunk))
                 yield chunk
         except BaseException as exc:
             with self._lock:

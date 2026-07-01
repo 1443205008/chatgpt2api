@@ -4,6 +4,7 @@ import json
 import mimetypes
 import queue
 import re
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -264,6 +265,7 @@ def iter_sse_payloads(
     started_at = time.monotonic()
     timeout_secs = float(max_duration_secs or 0)
     pending: bytes | None = None
+    aborted = False
 
     def _timeout_error() -> TimeoutError:
         return TimeoutError(f"SSE stream exceeded {_format_timeout_secs(timeout_secs)}")
@@ -275,7 +277,11 @@ def iter_sse_payloads(
 
     def _raise_if_timeout() -> None:
         if cancel_checker is not None:
-            cancel_checker()
+            try:
+                cancel_checker()
+            except Exception:
+                _abort_stream_nonblocking()
+                raise
         remaining = _remaining_secs()
         if remaining is not None and remaining <= 0:
             _abort_stream_nonblocking()
@@ -289,6 +295,8 @@ def iter_sse_payloads(
         stream_task.result(), so enforce our own deadline and only signal/close
         the underlying curl handle here.
         """
+        nonlocal aborted
+        aborted = True
         try:
             if getattr(response, "quit_now", None):
                 response.quit_now.set()
@@ -307,7 +315,7 @@ def iter_sse_payloads(
     def _iter_chunks() -> Iterator[bytes]:
         stream_queue = getattr(response, "queue", None)
         if stream_queue is None:
-            yield from response.iter_content()
+            yield from _iter_response_content_with_deadline()
             return
         while True:
             _raise_if_timeout()
@@ -327,6 +335,42 @@ def iter_sse_payloads(
             if chunk is STREAM_END:
                 break
             yield chunk
+
+    def _iter_response_content_with_deadline() -> Iterator[bytes]:
+        """Iterate response.iter_content() without letting a blocking read bypass our deadline.
+
+        Most curl_cffi streaming responses expose ``response.queue`` and are handled above.
+        Some proxy/transport combinations do not, and a direct ``iter_content()`` call can
+        block past ``max_duration_secs``. Move the blocking read to a daemon producer so the
+        consumer can keep checking cancellation/timeout and close the underlying stream.
+        """
+        item_queue: queue.Queue[object] = queue.Queue()
+        done = object()
+
+        def _produce() -> None:
+            try:
+                for item in response.iter_content():
+                    item_queue.put(item)
+            except Exception as exc:
+                item_queue.put(exc)
+            finally:
+                item_queue.put(done)
+
+        threading.Thread(target=_produce, name="sse-response-reader", daemon=True).start()
+        while True:
+            _raise_if_timeout()
+            remaining = _remaining_secs()
+            wait_secs = 1.0 if remaining is None else max(0.001, min(1.0, remaining))
+            try:
+                item = item_queue.get(timeout=wait_secs)
+            except queue.Empty:
+                _raise_if_timeout()
+                continue
+            if item is done:
+                break
+            if isinstance(item, Exception):
+                raise item
+            yield item
 
     try:
         for chunk in _iter_chunks():
@@ -356,10 +400,11 @@ def iter_sse_payloads(
             raise _timeout_error() from exc
         raise
     finally:
-        try:
-            response.close()
-        except Exception:
-            pass
+        if not aborted:
+            try:
+                response.close()
+            except Exception:
+                pass
 
 
 def save_images_from_text(text: str, prefix: str) -> list[Path]:

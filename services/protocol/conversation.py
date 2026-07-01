@@ -346,7 +346,7 @@ def _resolve_image_urls_with_monitor(
                 resolve_ms=resolve_ms,
                 index=index,
                 total=total,
-                status="text_reply" if text_reply else "failed",
+                status="failed",
                 upstream_error=diagnostic_excerpt(repr(exc), 1000),
             )
             log_payload: dict[str, Any] = {
@@ -1119,8 +1119,24 @@ def conversation_events(
     yield from iter_conversation_payloads(payloads, history_text, history_messages)
 
 
+def _text_account_email(access_token: str) -> str:
+    account = account_service.get_account(access_token)
+    if not account:
+        return ""
+    return str(account.get("email") or "").strip()
+
+
+def _remember_text_account(backend: OpenAIBackendAPI, access_token: str) -> str:
+    email = _text_account_email(access_token)
+    setattr(backend, "account_email", email)
+    return email
+
+
 def text_backend() -> OpenAIBackendAPI:
-    return OpenAIBackendAPI(access_token=account_service.get_text_access_token())
+    access_token = account_service.get_text_access_token()
+    backend = OpenAIBackendAPI(access_token=access_token)
+    _remember_text_account(backend, access_token)
+    return backend
 
 
 def stream_text_deltas(backend: OpenAIBackendAPI, request: ConversationRequest) -> Iterator[str]:
@@ -1133,7 +1149,9 @@ def stream_text_deltas(backend: OpenAIBackendAPI, request: ConversationRequest) 
         if token:
             attempted_tokens.add(token)
         try:
+            _remember_text_account(backend, token)
             active_backend = OpenAIBackendAPI(access_token=token)
+            _remember_text_account(active_backend, token)
             for event in conversation_events(
                 active_backend,
                 messages=request.messages,
@@ -1160,6 +1178,8 @@ def stream_text_deltas(backend: OpenAIBackendAPI, request: ConversationRequest) 
                     token = account_service.get_text_access_token(attempted_tokens)
                 if token:
                     continue
+            if token and not getattr(exc, "account_email", ""):
+                setattr(exc, "account_email", _text_account_email(token))
             raise
 
 
@@ -2146,7 +2166,7 @@ def _generate_single_image(
                     account_email=account_email,
                     index=index,
                     total=total,
-                    status="text_reply",
+                    status="failed",
                     upstream_error=text_reply,
                 )
             logger.info({
