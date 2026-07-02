@@ -28,6 +28,7 @@ config = {
         "request_timeout": 30,
         "wait_timeout": 30,
         "wait_interval": 2,
+        "api_use_register_proxy": True,
         "providers": [],
     },
     "proxy": "",
@@ -212,8 +213,22 @@ def _is_cloudflare_challenge(resp) -> bool:
     )
 
 
-def _mail_config() -> dict:
-    return {**config["mail"], "proxy": config["proxy"]}
+def _truthy(value: object, fallback: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return fallback
+
+
+def _mail_config(register_proxy: str = "") -> dict:
+    mail = config["mail"] if isinstance(config.get("mail"), dict) else {}
+    use_register_proxy = _truthy(mail.get("api_use_register_proxy"), True)
+    proxy = str(register_proxy or "").strip() if use_register_proxy else ""
+    return {**mail, "api_use_register_proxy": use_register_proxy, "proxy": proxy}
 
 
 def _authorize_landed_page(resp) -> str:
@@ -237,12 +252,12 @@ def _authorize_landed_page(resp) -> str:
     return ""
 
 
-def create_mailbox(username: str | None = None) -> dict:
-    return mail_provider.create_mailbox(_mail_config(), username)
+def create_mailbox(username: str | None = None, register_proxy: str = "") -> dict:
+    return mail_provider.create_mailbox(_mail_config(register_proxy), username)
 
 
-def wait_for_code(mailbox: dict) -> str | None:
-    return mail_provider.wait_for_code(_mail_config(), mailbox)
+def wait_for_code(mailbox: dict, register_proxy: str = "") -> str | None:
+    return mail_provider.wait_for_code(_mail_config(register_proxy), mailbox)
 
 
 from utils.sentinel import SentinelTokenGenerator, build_sentinel_token as _build_sentinel_token_tuple  # noqa: F401
@@ -766,7 +781,7 @@ class PlatformRegistrar:
             mailbox["_received_after"] = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
             self._send_passwordless_otp(index)
             step(index, "开始等待 Microsoft 登录验证码")
-            code = wait_for_code(mailbox)
+            code = wait_for_code(mailbox, register_proxy=self.proxy)
             if not code:
                 raise RuntimeError("等待 Microsoft 登录验证码超时")
             step(index, f"收到 Microsoft 登录验证码: {code}")
@@ -908,7 +923,7 @@ class PlatformRegistrar:
 
     def register(self, index: int) -> dict:
         step(index, "开始创建邮箱")
-        mailbox = create_mailbox()
+        mailbox = create_mailbox(register_proxy=self.proxy)
         email = str(mailbox.get("address") or "").strip()
         if not email:
             mail_provider.release_mailbox(mailbox)
@@ -929,7 +944,7 @@ class PlatformRegistrar:
                 mailbox["_received_after"] = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
                 self._send_otp(index)
                 step(index, "开始等待注册验证码")
-                code = wait_for_code(mailbox)
+                code = wait_for_code(mailbox, register_proxy=self.proxy)
                 if not code:
                     raise RuntimeError("等待注册验证码超时")
                 step(index, f"收到注册验证码: {code}")

@@ -42,6 +42,17 @@ def _outlook_credential_changed(old: dict | None, new: dict) -> bool:
     return False
 
 
+def _safe_bool(value: object, fallback: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return fallback
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -75,8 +86,11 @@ def _normalize(raw: dict) -> dict:
     cfg["target_available"] = max(1, int(cfg.get("target_available") or 1))
     cfg["check_interval"] = max(1, int(cfg.get("check_interval") or 5))
     cfg["proxy"] = str(cfg.get("proxy") or "").strip()
-    if isinstance(cfg.get("mail"), dict):
-        cfg["mail"].pop("proxy", None)
+    default_mail = _default_config()["mail"] if isinstance(_default_config().get("mail"), dict) else {}
+    mail = cfg.get("mail") if isinstance(cfg.get("mail"), dict) else {}
+    cfg["mail"] = {**default_mail, **mail}
+    cfg["mail"]["api_use_register_proxy"] = _safe_bool(cfg["mail"].get("api_use_register_proxy"), True)
+    cfg["mail"].pop("proxy", None)
     cfg["enabled"] = bool(cfg.get("enabled"))
     stats = {**_default_config()["stats"], **(raw.get("stats") if isinstance(raw.get("stats"), dict) else {}),
              "threads": cfg["threads"]}
@@ -298,7 +312,9 @@ class RegisterService:
 
     def _mail_config_with_proxy(self) -> dict:
         mail = json.loads(json.dumps(self._config.get("mail") if isinstance(self._config.get("mail"), dict) else {}, ensure_ascii=False))
-        mail["proxy"] = str(self._config.get("proxy") or "").strip()
+        use_register_proxy = _safe_bool(mail.get("api_use_register_proxy"), True)
+        mail["api_use_register_proxy"] = use_register_proxy
+        mail["proxy"] = str(self._config.get("proxy") or "").strip() if use_register_proxy else ""
         return mail
 
     def gptmail_status(self, provider: dict | None = None, force: bool = False) -> dict:
