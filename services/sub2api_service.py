@@ -7,7 +7,6 @@ import json
 import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
@@ -655,6 +654,74 @@ def _fetch_access_token_from_export(server: dict, account_id: str) -> tuple[str,
     }
 
 
+def _fetch_access_tokens_for_accounts(server: dict, account_ids: list[str]) -> tuple[dict[str, tuple[str, dict]], dict[str, str]]:
+    """Return exported account data keyed by requested sub2api account id.
+
+    Uses the batch data-export endpoint to avoid one HTTP request per account.  Some
+    older sub2api deployments may omit account ids in the export payload, so the
+    response order is used as a fallback mapping only when the exported id cannot
+    be matched to the requested ids.
+    """
+    ids = list(dict.fromkeys(_clean(item) for item in account_ids if _clean(item)))
+    if not ids:
+        return {}, {}
+
+    base_url = _clean(server.get("base_url"))
+    headers = _auth_headers(server)
+
+    session = Session(verify=True)
+    try:
+        response = session.get(
+            f"{base_url.rstrip('/')}/api/v1/admin/accounts/data",
+            headers=headers,
+            params={
+                "ids": ",".join(ids),
+                "timezone": "Asia/Shanghai",
+                "include_proxies": "false",
+            },
+            timeout=30,
+        )
+        if not response.ok:
+            raise RuntimeError(f"data export HTTP {response.status_code}")
+        payload = response.json()
+    finally:
+        session.close()
+
+    accounts = _extract_export_accounts(payload)
+    if not accounts:
+        raise RuntimeError("data export returned no accounts")
+
+    requested = set(ids)
+    results: dict[str, tuple[str, dict]] = {}
+    errors: dict[str, str] = {}
+    for index, account in enumerate(accounts):
+        credentials = _account_section(account, "credentials", "credential")
+        extra = _account_section(account, "extra", "metadata", "meta")
+        exported_id = _account_id(account, credentials)
+        account_id = exported_id if exported_id in requested else (ids[index] if index < len(ids) else exported_id)
+        account_name = account_id or _account_email(account, credentials, extra) or _clean(account.get("name")) or "unknown"
+        access_token = _account_access_token(account)
+        if not access_token:
+            errors[account_name] = "data export missing access_token"
+            continue
+        if not account_id:
+            errors[account_name] = "data export missing account id"
+            continue
+        results[account_id] = (
+            access_token,
+            {
+                "email": _account_email(account, credentials, extra),
+                "plan_type": _account_plan_type(account, credentials, extra),
+            },
+        )
+
+    for account_id in ids:
+        if account_id not in results and account_id not in errors:
+            errors[account_id] = "data export did not return this account"
+
+    return results, errors
+
+
 def _fetch_access_token_for_account(server: dict, account_id: str) -> tuple[str, dict]:
     """Return (access_token, account_meta) for a single sub2api account id."""
     export_error = ""
@@ -762,41 +829,55 @@ class Sub2APIImportService:
 
         payloads: list[dict] = []
         tokens: list[str] = []
-        max_workers = min(8, max(1, len(account_ids)))
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_map = {
-                executor.submit(_fetch_access_token_for_account, server, account_id): account_id
-                for account_id in account_ids
-            }
-            for future in as_completed(future_map):
-                account_id = future_map[future]
-                try:
-                    token, meta = future.result()
-                    payload: dict[str, object] = {
-                        "access_token": token,
-                        "source_type": "codex",
-                    }
-                    email = _clean(meta.get("email")) if isinstance(meta, dict) else ""
-                    plan_type = _clean(meta.get("plan_type")) if isinstance(meta, dict) else ""
-                    if email:
-                        payload["email"] = email
-                    if plan_type:
-                        payload["type"] = plan_type
-                    local_group_id = account_group_ids.get(account_id)
-                    if local_group_id:
-                        payload["group_id"] = local_group_id
-                    payloads.append(payload)
-                    tokens.append(token)
-                except Exception as exc:
-                    self._append_error(server_id, account_id, str(exc) or "unknown error")
+        batch_results: dict[str, tuple[str, dict]] = {}
+        batch_errors: dict[str, str] = {}
+        batch_error = ""
+        try:
+            batch_results, batch_errors = _fetch_access_tokens_for_accounts(server, account_ids)
+        except Exception as exc:
+            batch_error = str(exc) or "data export failed"
 
-                current = self._config.get_import_job(server_id) or {}
-                failed = len(current.get("errors") or [])
-                self._update_job(
-                    server_id,
-                    completed=int(current.get("completed") or 0) + 1,
-                    failed=failed,
-                )
+        def append_payload(account_id: str, token: str, meta: dict) -> None:
+            payload: dict[str, object] = {
+                "access_token": token,
+                "source_type": "codex",
+            }
+            email = _clean(meta.get("email")) if isinstance(meta, dict) else ""
+            plan_type = _clean(meta.get("plan_type")) if isinstance(meta, dict) else ""
+            if email:
+                payload["email"] = email
+            if plan_type:
+                payload["type"] = plan_type
+            local_group_id = account_group_ids.get(account_id)
+            if local_group_id:
+                payload["group_id"] = local_group_id
+            payloads.append(payload)
+            tokens.append(token)
+
+        for account_id in account_ids:
+            try:
+                if account_id in batch_results:
+                    token, meta = batch_results[account_id]
+                else:
+                    token, meta = _fetch_access_token_for_account(server, account_id)
+                append_payload(account_id, token, meta)
+            except Exception as exc:
+                fallback_error = str(exc) or "unknown error"
+                if batch_error:
+                    message = f"batch export failed: {batch_error}; fallback failed: {fallback_error}"
+                elif batch_errors.get(account_id):
+                    message = f"batch export skipped: {batch_errors[account_id]}; fallback failed: {fallback_error}"
+                else:
+                    message = fallback_error
+                self._append_error(server_id, account_id, message)
+
+            current = self._config.get_import_job(server_id) or {}
+            failed = len(current.get("errors") or [])
+            self._update_job(
+                server_id,
+                completed=int(current.get("completed") or 0) + 1,
+                failed=failed,
+            )
 
         if not payloads:
             current = self._config.get_import_job(server_id) or {}
