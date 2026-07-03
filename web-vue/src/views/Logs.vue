@@ -416,8 +416,8 @@
             </section>
 
             <DetailTextBlock
-              title="请求文本"
-              :content="selectedLog.requestText"
+              :title="selectedLog.requestTextTruncated ? '请求文本（已截断）' : '请求文本'"
+              :content="selectedLog.requestTextFull || selectedLog.requestText"
               @copy="copyText"
             />
             <DetailTextBlock
@@ -746,6 +746,9 @@ const logMeta = reactive<SystemLogsResponse>({
   limit: DEFAULT_SYSTEM_LOG_LIMIT,
   offset: 0,
   has_more: false,
+  facets_scope: '',
+  stats_scope: '',
+  total_scope: '',
   facets: {
     statuses: {},
     endpoints: {},
@@ -875,10 +878,10 @@ const runtimeStats = computed(() => {
 
 const systemMetricItems = computed(() => [
   { label: '总数', value: logStats.value.total, class: 'text-foreground' },
-  { label: '成功', value: logStats.value.success, class: 'text-emerald-600' },
-  { label: '失败', value: logStats.value.failed, class: 'text-rose-600' },
-  { label: '限流', value: logStats.value.limited, class: 'text-amber-600' },
-  { label: '图片接口', value: logStats.value.image, class: 'text-cyan-600' },
+  { label: logMeta.stats_scope === 'page' ? '本页成功' : '成功', value: logStats.value.success, class: 'text-emerald-600' },
+  { label: logMeta.stats_scope === 'page' ? '本页失败' : '失败', value: logStats.value.failed, class: 'text-rose-600' },
+  { label: logMeta.stats_scope === 'page' ? '本页限流' : '限流', value: logStats.value.limited, class: 'text-amber-600' },
+  { label: logMeta.stats_scope === 'page' ? '本页图片' : '图片接口', value: logStats.value.image, class: 'text-cyan-600' },
 ])
 
 const runtimeMetricItems = computed(() => [
@@ -1772,6 +1775,9 @@ async function fetchLogs() {
     logMeta.limit = response.limit
     logMeta.offset = response.offset
     logMeta.has_more = response.has_more
+    logMeta.facets_scope = response.facets_scope
+    logMeta.stats_scope = response.stats_scope
+    logMeta.total_scope = response.total_scope
     logMeta.facets = response.facets
     logMeta.stats = response.stats
   } catch (error: any) {

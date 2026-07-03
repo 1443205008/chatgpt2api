@@ -22,6 +22,9 @@ type BackendLogsResponse = {
   limit?: number
   offset?: number
   has_more?: boolean
+  facets_scope?: string
+  stats_scope?: string
+  total_scope?: string
   facets?: {
     statuses?: Record<string, number>
     endpoints?: Record<string, number>
@@ -57,6 +60,9 @@ export type SystemLogsResponse = {
   limit: number
   offset: number
   has_more: boolean
+  facets_scope: string
+  stats_scope: string
+  total_scope: string
   facets: {
     statuses: Record<string, number>
     endpoints: Record<string, number>
@@ -142,6 +148,8 @@ export type SystemLogRow = {
   startedAt: string
   endedAt: string
   requestText: string
+  requestTextFull: string
+  requestTextTruncated: boolean
   requestShape: string
   error: string
   errorCode: string
@@ -359,6 +367,8 @@ export function normalizeSystemLogRow(item: SystemLog, index: number, options: N
   const monitor = detail.monitor && typeof detail.monitor === 'object' ? detail.monitor as Record<string, any> : {}
   const error = detailValue(detail, 'error')
   const requestText = detailValue(detail, 'request_text')
+  const requestTextFull = detailValue(detail, 'request_text_full') || requestText
+  const requestTextTruncated = detailRawValue(detail, 'request_text_truncated') === true
   const rawUpstreamMessage = detailValue(detail, 'raw_upstream_message')
   const upstreamPreview = detailValue(detail, 'upstream_message_preview')
   const duplicateDiagnosticValues = [error, rawUpstreamMessage, upstreamPreview].filter(Boolean)
@@ -416,6 +426,8 @@ export function normalizeSystemLogRow(item: SystemLog, index: number, options: N
     startedAt,
     endedAt,
     requestText,
+    requestTextFull,
+    requestTextTruncated,
     requestShape,
     error,
     errorCode,
@@ -691,6 +703,9 @@ function normalizeSystemResponse(response: BackendLogsResponse): SystemLogsRespo
     limit: Number(response.limit || items.length || 0),
     offset: Number(response.offset || 0),
     has_more: response.has_more === true,
+    facets_scope: cleanString(response.facets_scope),
+    stats_scope: cleanString(response.stats_scope),
+    total_scope: cleanString(response.total_scope),
     facets: {
       statuses: facets.statuses || {},
       endpoints: facets.endpoints || {},
