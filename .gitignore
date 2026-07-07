@@ -33,7 +33,7 @@ git_cache/
 # 调试/测试输出目录
 .codex/run-logs/
 .playwright-mcp/
-logs/
+/logs/
 *.log
 runtime/
 loginwithpassword_*/
