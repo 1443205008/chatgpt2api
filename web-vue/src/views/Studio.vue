@@ -112,6 +112,7 @@
         @remove-reference="referenceRuntime.remove"
         @clear-references="referenceRuntime.clear"
         @preview-reference="referenceRuntime.open"
+        @open-prompts="openPromptPicker"
       />
     </main>
 
@@ -131,6 +132,12 @@
       @copy="copyText"
       @download="downloadPreviewImage"
     />
+    <StudioPromptPicker
+      v-if="isPromptPickerOpen"
+      :open="isPromptPickerOpen"
+      @close="isPromptPickerOpen = false"
+      @select="applyPromptTemplate"
+    />
   </div>
 </template>
 
@@ -142,6 +149,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useToast } from '@/composables/useToast'
 import { useConfirmDialog } from '@/composables/useConfirmDialog'
 import { usePageRuntime } from '@/composables/usePageRuntime'
+import { preloadPromptLibrary } from '@/composables/usePromptLibraryRuntime'
 import { downloadUrlAsFile } from '@/lib/downloads'
 import {
   buildStudioConversationLookup,
@@ -171,12 +179,14 @@ import type {
   StudioConversation,
   StudioConversationBadgeState,
 } from '@/components/studio/types'
+import type { PromptLibraryItem } from '@/api/prompts'
 
 defineOptions({ name: 'Studio' })
 
 const StudioLightbox = defineAsyncComponent(() => import('@/components/studio/StudioLightbox.vue'))
 const StudioMessageList = defineAsyncComponent(() => import('@/components/studio/StudioMessageList.vue'))
 const StudioMobileHistory = defineAsyncComponent(() => import('@/components/studio/StudioMobileHistory.vue'))
+const StudioPromptPicker = defineAsyncComponent(() => import('@/components/studio/StudioPromptPicker.vue'))
 
 const settingsStore = useSettingsStore()
 const toast = useToast()
@@ -191,6 +201,7 @@ const composeMode = composerRuntime.composeMode
 const composerText = composerRuntime.composerText
 const editingMessageId = composerRuntime.editingMessageId
 const isSending = composerRuntime.isSending
+const isPromptPickerOpen = ref(false)
 const messageListRef = ref<StudioMessageListScroller | null>(null)
 const scrollRuntime = useStudioScrollRuntime({
   pageRuntime,
@@ -409,6 +420,20 @@ async function appendFiles(files: File[]) {
   if (added) composerRuntime.activateImageMode()
 }
 
+function openPromptPicker() {
+  isPromptPickerOpen.value = true
+}
+
+function applyPromptTemplate(prompt: PromptLibraryItem) {
+  composerText.value = prompt.prompt
+  if (composeMode.value === 'image') {
+    if (prompt.image_model) imageForm.model = prompt.image_model
+    if (prompt.image_size) imageForm.size = prompt.image_size
+    if (prompt.image_count && prompt.image_count > 0) imageForm.n = prompt.image_count
+  }
+  isPromptPickerOpen.value = false
+}
+
 function openPreview(src: string, name: string, localPath = '') {
   referenceRuntime.openPreview(src, name, localPath)
 }
@@ -466,6 +491,7 @@ function initializeStudio() {
     void settingsStore.loadSettings()
   }
   void modelFormRuntime.loadModelCatalog()
+  void preloadPromptLibrary()
   void imageTaskRuntime.refresh()
   scheduleScrollToBottom()
 }

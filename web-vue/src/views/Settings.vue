@@ -102,6 +102,10 @@
         @sync-storage="syncImageStorageFiles"
       />
 
+      <SettingsPromptSourcesPanel
+        v-else-if="activeSettingsTab === 'prompts'"
+      />
+
       <SettingsBackupPanel
         v-else-if="activeSettingsTab === 'backup'"
         :settings="localSettings"
@@ -265,6 +269,7 @@ import SettingsExternalSourcesPanel from '@/views/settings/SettingsExternalSourc
 import SettingsImageErrorsPanel from '@/views/settings/SettingsImageErrorsPanel.vue'
 import SettingsIntegrationsPanel from '@/views/settings/SettingsIntegrationsPanel.vue'
 import SettingsProxyRuntimePanel from '@/views/settings/SettingsProxyRuntimePanel.vue'
+import SettingsPromptSourcesPanel from '@/views/settings/SettingsPromptSourcesPanel.vue'
 import SettingsUserKeyModals from '@/views/settings/SettingsUserKeyModals.vue'
 import SettingsStorageReviewPanel from '@/views/settings/SettingsStorageReviewPanel.vue'
 import SettingsUserKeysPanel from '@/views/settings/SettingsUserKeysPanel.vue'

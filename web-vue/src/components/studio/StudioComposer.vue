@@ -62,6 +62,16 @@
         <div class="chat-input-actions" @click.stop>
           <div class="chat-input-action-row">
             <button
+              type="button"
+              class="chat-input-action"
+              :disabled="isSending"
+              @click="$emit('open-prompts')"
+            >
+              <span class="icon"><Icon icon="lucide:book-open" class="h-3.5 w-3.5" /></span>
+              <span class="text">提示词</span>
+            </button>
+
+            <button
               v-for="option in modeOptions"
               :key="option.value"
               type="button"
@@ -288,6 +298,7 @@ const emit = defineEmits<{
   'remove-reference': [index: number]
   'clear-references': []
   'preview-reference': [reference: StudioReference]
+  'open-prompts': []
 }>()
 
 const composerShellRef = ref<HTMLElement | null>(null)

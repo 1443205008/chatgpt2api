@@ -71,6 +71,7 @@ export const settingsTabs: SettingsSelectOption[] = [
   { value: 'basic', label: '基础配置' },
   { value: 'image-errors', label: '图片错误' },
   { value: 'storage', label: '图片存储与审核' },
+  { value: 'prompts', label: '提示词源' },
   { value: 'backup', label: 'R2 备份' },
   { value: 'keys', label: '用户密钥' },
   { value: 'api-docs', label: '接口接入' },
