@@ -101,6 +101,7 @@ import {
   type ImageTask,
   type ImageTaskAsset,
 } from '@/api/imageTasks'
+import { splitStudioSearchCalls } from '@/lib/studioToolCalls'
 import ModalCloseButton from '@/components/ai/ModalCloseButton.vue'
 import StudioMessageItem, {
   type StudioMessageActionKey,
@@ -191,8 +192,10 @@ function buildMessageView(message: StudioMessage): StudioMessageView {
   const imageSlotCount = computeImageSlotCount(message, task, renderableAssetCount)
   const isCollapsible = computeIsCollapsibleMessage(message)
   const isCollapsed = isCollapsible ? computeIsMessageCollapsed(message) : false
-  const markdownContent = buildMarkdownDisplayContent(message)
-  const signature = messageViewSignature(message, task, taskAssets, renderableAssetCount, imageSlotCount, isCollapsed, isCollapsible, markdownContent)
+  const parsedContent = splitStudioSearchCalls(buildMarkdownDisplayContent(message))
+  const markdownContent = parsedContent.content
+  const searchQueries = parsedContent.queries
+  const signature = messageViewSignature(message, task, taskAssets, renderableAssetCount, imageSlotCount, isCollapsed, isCollapsible, markdownContent, searchQueries)
   const cached = messageViewCache.get(message.id)
   if (cached && sameMessageViewSignature(cached.signature, signature)) {
     messageViewCache.delete(message.id)
@@ -218,6 +221,7 @@ function buildMessageView(message: StudioMessage): StudioMessageView {
     isCollapsible,
     isCollapsed,
     markdownContent,
+    searchQueries,
   }
   messageViewCache.set(message.id, { signature, revision, view })
   trimStringKeyCache(messageViewCache, MAX_MESSAGE_VIEW_CACHE_SIZE)
@@ -233,6 +237,7 @@ function messageViewSignature(
   isCollapsed: boolean,
   isCollapsible: boolean,
   markdownContent: string,
+  searchQueries: string[],
 ): MessageViewSignature {
   return [
     message.id,
@@ -255,6 +260,7 @@ function messageViewSignature(
     isCollapsible,
     isCollapsed,
     compactStringSignature(markdownContent),
+    arraySignature(searchQueries),
     task?.id,
     task?.status,
     task?.mode,

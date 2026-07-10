@@ -76,6 +76,18 @@
             </template>
 
             <template v-else-if="message.mode !== 'image'">
+              <div v-if="message.searchQueries.length" class="studio-search-call-list">
+                <div
+                  v-for="query in message.searchQueries"
+                  :key="query"
+                  class="studio-search-call"
+                  :title="query"
+                >
+                  <Icon icon="lucide:search" class="studio-search-call-icon h-3.5 w-3.5" />
+                  <span class="studio-search-call-label">search</span>
+                  <span class="studio-search-call-query">{{ query }}</span>
+                </div>
+              </div>
               <StudioMarkdownContent
                 v-if="message.content || message.status === 'streaming'"
                 :content="message.markdownContent || ' '"
@@ -275,6 +287,7 @@ export type StudioMessageView = StudioMessage & {
   isCollapsible: boolean
   isCollapsed: boolean
   markdownContent: string
+  searchQueries: string[]
 }
 
 defineProps<{
@@ -606,6 +619,48 @@ function isCodeMessage(message: StudioMessageView) {
   margin: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.studio-search-call-list {
+  display: grid;
+  gap: 0.4rem;
+  margin-bottom: 0.75rem;
+}
+
+.studio-search-call {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 1.8rem;
+  align-items: center;
+  gap: 0.45rem;
+  border-left: 2px solid hsl(var(--foreground) / 0.28);
+  background: hsl(var(--muted) / 0.24);
+  padding: 0.28rem 0.62rem;
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
+.studio-search-call-icon {
+  flex: 0 0 auto;
+  color: hsl(var(--foreground) / 0.84);
+}
+
+.studio-search-call-label {
+  flex: 0 0 auto;
+  color: hsl(var(--foreground));
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-weight: 700;
+}
+
+.studio-search-call-query {
+  min-width: 0;
+  overflow: hidden;
+  color: hsl(var(--muted-foreground));
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .studio-attachment-line {
