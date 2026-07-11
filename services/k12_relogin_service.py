@@ -140,17 +140,7 @@ def _relogin_one(
 
     registrar = PlatformRegistrar(proxy)
     try:
-        mail_cfg = _mail_config(proxy)
-
-        # Build a mailbox dict that points to the account's email.
-        # We need a provider that can receive mail for this address.
-        # create_mailbox() picks from the configured pool; we pass the known
-        # email as the username hint so providers that support it (e.g.
-        # cloudflare_temp_email) create/retrieve the right inbox.
-        # For outlook_token providers the pool does the matching internally.
         mailbox = create_mailbox(username=email, register_proxy=proxy)
-        # Ensure the mailbox address matches the account email.
-        mailbox["address"] = email
 
         # Step 1 — authorize (start PKCE session)
         registrar._platform_authorize(email, 0, screen_hint="login_or_signup")

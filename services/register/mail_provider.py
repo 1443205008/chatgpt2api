@@ -1855,9 +1855,25 @@ class OutlookTokenProvider(BaseMailProvider):
     def create_mailbox(self, username: str | None = None) -> dict[str, Any]:
         if not self.pool:
             raise RuntimeError("OutlookToken 邮箱池为空，请在邮箱配置中导入 email----password----client_id----refresh_token")
+        target = str(username or "").strip().lower()
         with _outlook_token_state_lock:
             store = _load_outlook_token_state()
-            credential = next((item for item in self.pool if _outlook_credential_available(store, item)), None)
+            if target:
+                # Match by email or alias first so re-login always reads the right inbox.
+                credential = next(
+                    (item for item in self.pool
+                     if str(item.get("email") or "").strip().lower() == target
+                     or str(item.get("login_email") or "").strip().lower() == target
+                     or str(item.get("alias_of") or "").strip().lower() == target),
+                    None,
+                )
+                if credential is None:
+                    raise RuntimeError(
+                        f"[{self.label}] OutlookToken 邮箱池中未找到与 {username} 匹配的凭证，"
+                        "请先在邮箱配置中导入该账号对应的 email----password----client_id----refresh_token"
+                    )
+            else:
+                credential = next((item for item in self.pool if _outlook_credential_available(store, item)), None)
             if credential is None:
                 raise RuntimeError(f"[{self.label}] OutlookToken 邮箱池暂无可用邮箱（共 {len(self.pool)} 个，已用尽或全部占用/失效），请导入新邮箱或重置池状态")
             store[credential["email"].strip().lower()] = {"state": "in_use", "reason": "", "updated_at": datetime.now(timezone.utc).isoformat()}

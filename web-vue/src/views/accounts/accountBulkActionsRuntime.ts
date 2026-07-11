@@ -339,7 +339,8 @@ export function useAccountBulkActionsRuntime(options: AccountBulkActionsRuntimeO
         })
         await options.loadData({ silentErrorToast: true })
         if (failed > 0) {
-          toast.warning(`${actionMeta.successText}，成功 ${success} 个，失败 ${failed} 个`)
+          const firstError = reloginProgress?.errors?.[0]
+          toast.warning(`${actionMeta.successText}，成功 ${success} 个，失败 ${failed} 个${firstError ? `：${firstError}` : ''}`)
         } else {
           toast.success(`${actionMeta.successText}，共 ${success} 个`)
         }
