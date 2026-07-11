@@ -185,6 +185,16 @@ export interface AccountRefreshProgress {
   } | null
 }
 
+export interface AccountK12ReloginProgress {
+  total: number
+  processed: number
+  success: number
+  failed: number
+  errors: string[]
+  done: boolean
+  error?: string | null
+}
+
 type BackendAccount = Record<string, any>
 
 type BackendAccountsResponse = {
@@ -515,6 +525,46 @@ async function refreshAndPoll(accessTokens: string[]) {
   throw new Error('刷新进度超时，请稍后重新打开列表查看结果')
 }
 
+async function reloginK12PollWithProgress(
+  accountIdsOrTokens: string[],
+  workspaceId: string,
+  onProgress?: (progress: AccountK12ReloginProgress) => void,
+  proxy?: string,
+) {
+  const accessTokens = Array.from(new Set(accountIdsOrTokens.map(resolveToken).filter(Boolean)))
+  if (!accessTokens.length) {
+    throw new Error('没有可处理的 access token')
+  }
+
+  const start = await apiClient.post<
+    { access_tokens: string[]; workspace_id: string; proxy?: string },
+    { progress_id: string }
+  >('/api/accounts/k12-relogin', {
+    access_tokens: accessTokens,
+    workspace_id: workspaceId,
+    ...(proxy ? { proxy } : {}),
+  })
+  const progressId = cleanString(start.progress_id)
+  if (!progressId) {
+    return { status: 'ok', progress: null as AccountK12ReloginProgress | null }
+  }
+
+  const deadline = Date.now() + Math.max(120_000, accessTokens.length * 60_000)
+  while (Date.now() < deadline) {
+    const progress = await apiClient.get<never, AccountK12ReloginProgress>(
+      `/api/accounts/k12-relogin/progress/${encodeURIComponent(progressId)}`,
+    )
+    onProgress?.(progress)
+    if (progress.done || progress.error) {
+      if (progress.error) throw new Error(String(progress.error))
+      return { status: 'ok', progress }
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 2000))
+  }
+
+  throw new Error('切换 K12 空间超时，请稍后重新打开列表查看结果')
+}
+
 async function refreshAndPollWithProgress(
   accountIdsOrTokens: string[],
   onProgress?: (progress: AccountRefreshProgress) => void,
@@ -808,6 +858,29 @@ export const accountsApi = {
 
   bulkDelete: (accountIds: string[]) =>
     deleteAccountsByIds(accountIds),
+
+  joinK12Workspace: async (accountIdsOrTokens: string[], workspaceId: string) => {
+    const accessTokens = Array.from(new Set(accountIdsOrTokens.map(resolveToken).filter(Boolean)))
+    if (!accessTokens.length) {
+      return { status: 'ok', success_count: 0, errors: [] as string[] }
+    }
+    const response = await apiClient.post<
+      { access_tokens: string[]; workspace_id: string },
+      { success_count: number; errors: string[] }
+    >('/api/accounts/k12-join', { access_tokens: accessTokens, workspace_id: workspaceId })
+    return {
+      status: 'ok',
+      success_count: Number(response.success_count || 0),
+      errors: Array.isArray(response.errors) ? response.errors.filter(Boolean) : [],
+    }
+  },
+
+  reloginK12WithProgress: (
+    accountIdsOrTokens: string[],
+    workspaceId: string,
+    onProgress?: (progress: AccountK12ReloginProgress) => void,
+    proxy?: string,
+  ) => reloginK12PollWithProgress(accountIdsOrTokens, workspaceId, onProgress, proxy),
 
   resolveCookie: async (_cookie: string) => ({
     status: 'unsupported',

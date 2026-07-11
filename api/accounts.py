@@ -91,6 +91,17 @@ class AccountGroupBindRequest(BaseModel):
     group_id: str = ""
 
 
+class AccountK12JoinRequest(BaseModel):
+    access_tokens: list[str] = Field(default_factory=list)
+    workspace_id: str = ""
+
+
+class AccountK12ReloginRequest(BaseModel):
+    access_tokens: list[str] = Field(default_factory=list)
+    workspace_id: str = ""
+    proxy: str = ""
+
+
 class AccountGroupRequest(BaseModel):
     id: str = ""
     name: str = ""
@@ -774,6 +785,90 @@ def create_router() -> APIRouter:
             **_account_group_payload(),
             "items": account_service.list_accounts(),
         }
+
+    @router.post("/api/accounts/k12-join")
+    async def k12_join_workspace(body: AccountK12JoinRequest, authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        access_tokens = _unique_tokens(body.access_tokens)
+        if not access_tokens:
+            raise HTTPException(status_code=400, detail={"error": "access_tokens is required"})
+        workspace_id = (body.workspace_id or "").strip()
+        if not workspace_id:
+            raise HTTPException(status_code=400, detail={"error": "workspace_id is required"})
+
+        from curl_cffi import requests as cffi_requests
+
+        success = 0
+        errors: list[str] = []
+
+        def _join_one(access_token: str) -> tuple[bool, str]:
+            try:
+                session = cffi_requests.Session(impersonate="chrome", verify=True)
+                resp = session.post(
+                    f"https://chatgpt.com/backend-api/accounts/{workspace_id}/invites/request",
+                    headers={
+                        "accept": "*/*",
+                        "accept-language": "en-US,en;q=0.9",
+                        "authorization": f"Bearer {access_token}",
+                        "cache-control": "no-cache",
+                        "oai-language": "en-US",
+                        "pragma": "no-cache",
+                        "referer": "https://chatgpt.com/k12-verification",
+                        "sec-ch-ua-arch": '"x86"',
+                        "sec-ch-ua-bitness": '"64"',
+                        "sec-ch-ua-mobile": "?0",
+                        "sec-ch-ua-model": '""',
+                        "sec-ch-ua-platform": '"macOS"',
+                        "sec-ch-ua-platform-version": '"13.5.1"',
+                        "sec-fetch-dest": "empty",
+                        "sec-fetch-mode": "cors",
+                        "sec-fetch-site": "same-origin",
+                    },
+                    timeout=30,
+                )
+                session.close()
+                if resp.status_code in (200, 201, 204):
+                    return True, ""
+                body_text = (resp.text or "")[:200]
+                return False, f"HTTP {resp.status_code}: {body_text}"
+            except Exception as exc:
+                return False, str(exc)
+
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            futures = {executor.submit(_join_one, token): token for token in access_tokens}
+            for future, token in futures.items():
+                ok, err = future.result()
+                if ok:
+                    success += 1
+                else:
+                    errors.append(f"{token[:10]}...: {err}")
+
+        return {"success_count": success, "errors": errors}
+
+    @router.post("/api/accounts/k12-relogin")
+    async def k12_relogin_workspace(body: AccountK12ReloginRequest, authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        access_tokens = _unique_tokens(body.access_tokens)
+        if not access_tokens:
+            raise HTTPException(status_code=400, detail={"error": "access_tokens is required"})
+        workspace_id = (body.workspace_id or "").strip()
+        if not workspace_id:
+            raise HTTPException(status_code=400, detail={"error": "workspace_id is required"})
+
+        from services.k12_relogin_service import relogin_accounts_async
+        proxy = (body.proxy or "").strip()
+        progress_id = await run_in_threadpool(relogin_accounts_async, access_tokens, workspace_id, proxy)
+        return {"status": "ok", "progress_id": progress_id}
+
+    @router.get("/api/accounts/k12-relogin/progress/{progress_id}")
+    async def k12_relogin_progress(progress_id: str, authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        from services.k12_relogin_service import get_progress
+        progress = get_progress(progress_id)
+        if progress is None:
+            raise HTTPException(status_code=404, detail={"error": "progress_id not found"})
+        return progress
 
     @router.post("/api/accounts/oauth/start")
     async def start_oauth_login(

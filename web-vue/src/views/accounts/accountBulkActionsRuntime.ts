@@ -1,12 +1,12 @@
 import type { Ref } from 'vue'
 
-import { accountsApi, type Account, type AccountGroup } from '@/api/accounts'
+import { accountsApi, type Account, type AccountGroup, type AccountK12ReloginProgress } from '@/api/accounts'
 import type { ProxyGroup } from '@/api/proxy'
 import { useConfirmDialog } from '@/composables/useConfirmDialog'
 import { useToast } from '@/composables/useToast'
 import type { useAccountBulkProgressRuntime } from './accountBulkProgressRuntime'
 
-export type AccountBulkAction = 'refresh' | 'reset' | 'enable' | 'disable' | 'delete'
+export type AccountBulkAction = 'refresh' | 'reset' | 'enable' | 'disable' | 'delete' | 'join_k12' | 'relogin_k12'
 
 type AccountSelectionAdapter = {
   selectedIds: Ref<string[]>
@@ -73,6 +73,8 @@ function bulkActionMeta(action: AccountBulkAction) {
     enable: { title: '批量启用账号', confirmText: '确认启用', successText: '批量启用完成' },
     disable: { title: '批量禁用账号', confirmText: '确认禁用', successText: '批量禁用完成' },
     delete: { title: '批量删除账号', confirmText: '确认删除', successText: '批量删除完成' },
+    join_k12: { title: '申请加入 K12 空间', confirmText: '确认申请', successText: '申请加入完成' },
+    relogin_k12: { title: '切换到 K12 空间', confirmText: '确认切换', successText: '切换完成' },
   }[action]
 }
 
@@ -267,6 +269,87 @@ export function useAccountBulkActionsRuntime(options: AccountBulkActionsRuntimeO
 
     if (action === 'refresh') {
       await refreshAccountsWithProgress(targetIds, '批量刷新账号信息和额度')
+      return
+    }
+
+    if (action === 'join_k12') {
+      const workspaceId = window.prompt('请输入 K12 Workspace ID（UUID 格式）:')?.trim()
+      if (!workspaceId) return
+      const actionMeta = bulkActionMeta('join_k12')!
+      const confirmed = await confirmDialog.ask({
+        title: actionMeta.title,
+        message: `确认用选中的 ${targetIds.length} 个账号申请加入 Workspace：${workspaceId} 吗？`,
+        confirmText: actionMeta.confirmText,
+        cancelText: '取消',
+      })
+      if (!confirmed) return
+      try {
+        const result = await runBulkMutationWithProgress(
+          actionMeta.title,
+          targetIds,
+          (ids) => accountsApi.joinK12Workspace(ids, workspaceId),
+        )
+        const errors = Array.isArray(result.errors) ? result.errors.filter(Boolean) : []
+        if (result.stopped) {
+          toast.warning(`${actionMeta.title}已停止，已处理 ${result.processed || 0}/${targetIds.length} 个账号`)
+        } else if (errors.length > 0) {
+          toast.warning(`${actionMeta.successText}，成功 ${result.success_count} 个，失败 ${errors.length} 个`)
+        } else {
+          toast.success(`${actionMeta.successText}，共 ${result.success_count} 个`)
+        }
+      } catch (error) {
+        options.setError(`${actionMeta.title}失败`, error)
+      }
+      return
+    }
+
+    if (action === 'relogin_k12') {
+      const workspaceId = window.prompt('请输入要切换的 K12 Workspace ID（UUID 格式）:')?.trim()
+      if (!workspaceId) return
+      const actionMeta = bulkActionMeta('relogin_k12')!
+      const confirmed = await confirmDialog.ask({
+        title: actionMeta.title,
+        message: `即将对 ${targetIds.length} 个账号通过邮箱 OTP 重新登录并切换到 Workspace：${workspaceId}，此操作会更新账号 token，是否继续？`,
+        confirmText: actionMeta.confirmText,
+        cancelText: '取消',
+      })
+      if (!confirmed) return
+
+      options.bulkProgress.start(actionMeta.title, targetIds.length, 'mutation')
+      try {
+        const result = await accountsApi.reloginK12WithProgress(
+          targetIds,
+          workspaceId,
+          (progress: AccountK12ReloginProgress) => {
+            options.bulkProgress.update({
+              total: progress.total,
+              processed: progress.processed,
+              done: progress.done,
+              total_quota: 0,
+            })
+          },
+        )
+        const reloginProgress = result.progress
+        const failed = reloginProgress?.failed ?? 0
+        const success = reloginProgress?.success ?? 0
+        options.bulkProgress.finish({
+          total: targetIds.length,
+          processed: reloginProgress?.processed ?? targetIds.length,
+          total_quota: 0,
+        })
+        await options.loadData({ silentErrorToast: true })
+        if (failed > 0) {
+          toast.warning(`${actionMeta.successText}，成功 ${success} 个，失败 ${failed} 个`)
+        } else {
+          toast.success(`${actionMeta.successText}，共 ${success} 个`)
+        }
+      } catch (error) {
+        options.bulkProgress.fail(targetIds.length, 0, options.normalizeErrorMessage(error))
+        options.setError(`${actionMeta.title}失败`, error)
+        await options.loadData({ silentErrorToast: true })
+      } finally {
+        options.bulkProgress.end()
+      }
       return
     }
 

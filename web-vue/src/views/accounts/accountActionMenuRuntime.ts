@@ -55,6 +55,8 @@ const accountBulkActions = new Set<AccountBulkAction>([
   'enable',
   'disable',
   'delete',
+  'join_k12',
+  'relogin_k12',
 ])
 
 function isAccountImportAction(value: string): value is AccountImportMode {
@@ -133,6 +135,10 @@ export function useAccountActionMenuRuntime(options: AccountActionMenuRuntimeOpt
     ],
     bindAccountGroupBatchItems.value,
     [
+      { key: 'join_k12', label: '申请加入 K12 空间' },
+      { key: 'relogin_k12', label: '切换到 K12 空间' },
+    ],
+    [
       { key: 'enable', label: '批量启用' },
       { key: 'disable', label: '批量禁用' },
       { key: 'delete', label: '批量删除', danger: true },
@@ -161,6 +167,8 @@ export function useAccountActionMenuRuntime(options: AccountActionMenuRuntimeOpt
       [
         { key: 'enable', label: '启用选中', disabled: noSelection },
         { key: 'disable', label: '禁用选中', disabled: noSelection },
+        { key: 'join_k12', label: '申请加入 K12 空间', disabled: noSelection },
+        { key: 'relogin_k12', label: '切换到 K12 空间', disabled: noSelection },
         { key: 'delete', label: '删除选中', disabled: noSelection, danger: true },
       ],
     )
