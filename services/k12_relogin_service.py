@@ -151,13 +151,19 @@ def _relogin_one(
         err = ""
         for attempt in range(2):
             if attempt:
-                # Session expired; reset and re-authorize before retrying
+                # Session expired between authorize and send-otp; reset and retry
                 registrar._reset_auth_cookies()
                 registrar._platform_authorize(email, 0, screen_hint="login_or_signup")
 
             registrar._authorize_continue_login(email, 0)
             mailbox["_received_after"] = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
-            registrar._send_passwordless_otp(0)
+            try:
+                registrar._send_passwordless_otp(0)
+            except RuntimeError as send_err:
+                msg = str(send_err)
+                if attempt == 0 and ("invalid_state" in msg or "no longer valid" in msg):
+                    continue
+                raise
 
             code = wait_for_code(mailbox, register_proxy=proxy)
             if not code:
