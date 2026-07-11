@@ -306,10 +306,11 @@ export function useAccountBulkActionsRuntime(options: AccountBulkActionsRuntimeO
     if (action === 'relogin_k12') {
       const workspaceId = window.prompt('请输入要切换的 K12 Workspace ID（UUID 格式）:')?.trim()
       if (!workspaceId) return
+      const proxy = window.prompt('请输入代理地址（留空则不使用代理，格式：http://host:port）:')?.trim() || ''
       const actionMeta = bulkActionMeta('relogin_k12')!
       const confirmed = await confirmDialog.ask({
         title: actionMeta.title,
-        message: `即将对 ${targetIds.length} 个账号通过邮箱 OTP 重新登录并切换到 Workspace：${workspaceId}，此操作会更新账号 token，是否继续？`,
+        message: `即将对 ${targetIds.length} 个账号通过邮箱 OTP 重新登录并切换到 Workspace：${workspaceId}${proxy ? `（代理：${proxy}）` : ''}，此操作会更新账号 token，是否继续？`,
         confirmText: actionMeta.confirmText,
         cancelText: '取消',
       })
@@ -328,6 +329,7 @@ export function useAccountBulkActionsRuntime(options: AccountBulkActionsRuntimeO
               total_quota: 0,
             })
           },
+          proxy,
         )
         const reloginProgress = result.progress
         const failed = reloginProgress?.failed ?? 0
