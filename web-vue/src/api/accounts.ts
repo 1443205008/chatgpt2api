@@ -17,6 +17,7 @@ export interface Account {
   source_type?: string
   proxy?: string
   group_id?: string
+  workspace_id?: string
   quota?: number
   image_quota_unknown?: boolean
   name: string
@@ -385,6 +386,7 @@ function mapBackendAccount(item: BackendAccount, index: number, usedIds: Set<str
     source_type: sourceType,
     proxy: cleanString(item.proxy),
     group_id: cleanString(item.group_id),
+    workspace_id: cleanString(item.workspace_id),
     quota,
     image_quota_unknown: imageQuotaUnknown,
     name: email || `${type} / ${sourceType}`,

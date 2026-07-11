@@ -8,6 +8,7 @@ import { usePagedQuery } from '@/composables/usePageQuery'
 import { useToast } from '@/composables/useToast'
 import { errorMessage } from '@/lib/errorMessage'
 import { useAccountBulkActionsRuntime } from './accountBulkActionsRuntime'
+import { useK12ReloginDialog } from '@/composables/useK12ReloginDialog'
 import { useAccountBulkProgressRuntime } from './accountBulkProgressRuntime'
 import { useAccountCrudRuntime } from './accountCrudRuntime'
 import { useAccountExportRuntime } from './accountExportRuntime'
@@ -232,6 +233,8 @@ export function useAccountsPage() {
   const manualTokenText = accountImport.manualTokenText
   const sessionJsonText = accountImport.sessionJsonText
 
+  const k12ReloginDialog = useK12ReloginDialog()
+
   const accountBulkActions = useAccountBulkActionsRuntime({
     bulkProgress,
     accountSelection,
@@ -246,6 +249,7 @@ export function useAccountsPage() {
     setError,
     loadData,
     applyAccountGroupsPayload,
+    openK12ReloginDialog: () => k12ReloginDialog.ask(proxyGroups.value),
   })
   const refreshAllAccounts = accountBulkActions.refreshAllAccounts
   const refreshSelectedAccounts = accountBulkActions.refreshSelectedAccounts

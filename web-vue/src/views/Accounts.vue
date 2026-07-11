@@ -676,6 +676,73 @@
           </div>
     </ModalShell>
 
+    <!-- K12 workspace relogin dialog -->
+    <ModalShell :open="k12ReloginDialogOpen" max-width="36rem" :z-index="150">
+      <ModalHeader title="切换到 K12 空间" compact @close="k12ReloginCancel" />
+      <ModalBody>
+        <div class="space-y-4 text-sm">
+          <label>
+            <span class="ui-field-label">K12 Workspace ID</span>
+            <Input
+              :model-value="k12ReloginWorkspaceId"
+              block
+              root-class="font-mono"
+              placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+              @update:model-value="(v: string) => (k12ReloginWorkspaceId = v)"
+            />
+          </label>
+
+          <div class="space-y-2">
+            <span class="ui-field-label">注册代理</span>
+            <div class="grid grid-cols-1 gap-2 md:grid-cols-[11rem_minmax(0,1fr)]">
+              <label>
+                <span class="ui-field-label sr-only">代理模式</span>
+                <GroupedSelectMenu
+                  :model-value="k12ReloginProxyMode"
+                  :options="k12ReloginProxyModeOptions"
+                  aria-label="代理模式"
+                  selected-indicator="none"
+                  block
+                  @update:model-value="k12ReloginSetProxyMode"
+                />
+              </label>
+
+              <label v-if="k12ReloginProxyMode === 'group'">
+                <span class="ui-field-label sr-only">代理组</span>
+                <GroupedSelectMenu
+                  :model-value="k12ReloginSelectedProxyGroupId"
+                  :options="k12ReloginProxyGroupOptions"
+                  aria-label="代理组"
+                  selected-indicator="none"
+                  block
+                  @update:model-value="k12ReloginSelectProxyGroup"
+                />
+              </label>
+
+              <label v-else-if="k12ReloginProxyMode === 'custom'">
+                <span class="ui-field-label sr-only">自定义代理</span>
+                <Input
+                  :model-value="k12ReloginCustomProxyInput"
+                  block
+                  root-class="font-mono"
+                  placeholder="http://127.0.0.1:7890"
+                  @update:model-value="k12ReloginSetCustomProxyInput"
+                />
+              </label>
+
+              <SurfaceBox v-else tone="muted" dashed density="compact" class="flex min-h-[3.25rem] items-center text-xs">
+                {{ k12ReloginProxyMode === 'direct' ? '强制直连，不经过任何代理。' : '不单独指定代理，使用全局默认出口。' }}
+              </SurfaceBox>
+            </div>
+          </div>
+        </div>
+      </ModalBody>
+      <ModalFooter>
+        <Button variant="outline" @click="k12ReloginCancel">取消</Button>
+        <Button :disabled="!k12ReloginWorkspaceId.trim()" @click="k12ReloginConfirm">确认</Button>
+      </ModalFooter>
+    </ModalShell>
+
     <input ref="manualTokenFileInputRef" type="file" accept=".txt,text/plain" class="hidden" @change="handleManualTokenFileChange" />
     <input ref="cpaFileInputRef" type="file" accept=".json,application/json" multiple class="hidden" @change="handleCPAFileChange" />
   </div>
@@ -710,6 +777,7 @@ import AccountGridCard from './accounts/AccountGridCard.vue'
 import AccountTableRow from './accounts/AccountTableRow.vue'
 import { useAccountsPage } from './accounts/useAccountsPage'
 import { useAccountActionMenuRuntime } from './accounts/accountActionMenuRuntime'
+import { useK12ReloginDialog } from '@/composables/useK12ReloginDialog'
 import {
   accountGroupLabel as buildAccountGroupLabel,
   accountGroupNameMap as buildAccountGroupNameMap,
@@ -840,6 +908,23 @@ const {
   bindSelectedAccountsToGroup,
   exportAccounts,
 } = useAccountsPage()
+
+const {
+  open: k12ReloginDialogOpen,
+  workspaceId: k12ReloginWorkspaceId,
+  proxyMode: k12ReloginProxyMode,
+  selectedProxyGroupId: k12ReloginSelectedProxyGroupId,
+  customProxyInput: k12ReloginCustomProxyInput,
+  k12ReloginProxyModeOptions,
+  proxyGroupOptions: k12ReloginProxyGroupOptionsGetter,
+  confirm: k12ReloginConfirm,
+  cancel: k12ReloginCancel,
+  setProxyMode: k12ReloginSetProxyMode,
+  selectProxyGroup: k12ReloginSelectProxyGroup,
+  setCustomProxyInput: k12ReloginSetCustomProxyInput,
+} = useK12ReloginDialog()
+
+const k12ReloginProxyGroupOptions = computed(() => k12ReloginProxyGroupOptionsGetter())
 
 const manualTokenFileInputRef = ref<HTMLInputElement | null>(null)
 const cpaFileInputRef = ref<HTMLInputElement | null>(null)

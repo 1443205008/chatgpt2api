@@ -43,6 +43,7 @@ type AccountBulkActionsRuntimeOptions = {
   setError: (prefix: string, error: unknown, notify?: boolean) => void
   loadData: (options?: { silentErrorToast?: boolean }) => Promise<void>
   applyAccountGroupsPayload: (response: { groups?: AccountGroup[]; proxy_groups?: ProxyGroup[] }) => void
+  openK12ReloginDialog: () => Promise<{ workspaceId: string; proxy: string } | null>
 }
 
 function uniqueIds(ids: readonly string[]) {
@@ -274,8 +275,7 @@ export function useAccountBulkActionsRuntime(options: AccountBulkActionsRuntimeO
 
     if (action === 'join_k12') {
       const workspaceId = window.prompt('请输入 K12 Workspace ID（UUID 格式）:')?.trim()
-      if (!workspaceId) return
-      const actionMeta = bulkActionMeta('join_k12')!
+      if (!workspaceId) return      const actionMeta = bulkActionMeta('join_k12')!
       const confirmed = await confirmDialog.ask({
         title: actionMeta.title,
         message: `确认用选中的 ${targetIds.length} 个账号申请加入 Workspace：${workspaceId} 吗？`,
@@ -304,13 +304,13 @@ export function useAccountBulkActionsRuntime(options: AccountBulkActionsRuntimeO
     }
 
     if (action === 'relogin_k12') {
-      const workspaceId = window.prompt('请输入要切换的 K12 Workspace ID（UUID 格式）:')?.trim()
-      if (!workspaceId) return
-      const proxy = window.prompt('请输入代理地址（留空则不使用代理，格式：http://host:port）:')?.trim() || ''
+      const params = await options.openK12ReloginDialog()
+      if (!params) return
+      const { workspaceId, proxy } = params
       const actionMeta = bulkActionMeta('relogin_k12')!
       const confirmed = await confirmDialog.ask({
         title: actionMeta.title,
-        message: `即将对 ${targetIds.length} 个账号通过邮箱 OTP 重新登录并切换到 Workspace：${workspaceId}${proxy ? `（代理：${proxy}）` : ''}，此操作会更新账号 token，是否继续？`,
+        message: `即将对 ${targetIds.length} 个账号通过邮箱 OTP 重新登录并切换到 Workspace：${workspaceId}，此操作会更新账号 token，是否继续？`,
         confirmText: actionMeta.confirmText,
         cancelText: '取消',
       })

@@ -117,6 +117,7 @@ export function accountRowSignature(item: Account): string {
     item.type,
     item.source_type,
     item.group_id,
+    item.workspace_id,
     item.proxy,
     item.backend_status,
     item.image_quota_unknown ? 1 : 0,
@@ -573,6 +574,10 @@ export function accountSourceText(item: Account): string {
   const type = cleanString(item.type) || 'free'
   const sourceType = cleanString(item.source_type) || 'web'
   return `${type} / ${sourceType}`
+}
+
+export function accountK12WorkspaceId(item: Account): string {
+  return cleanString(item.workspace_id)
 }
 
 export function accountProxyText(item: Account): string {

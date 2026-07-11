@@ -33,6 +33,12 @@
         :label="accountSourceText(item)"
         tone-class="border-cyan-500/40 bg-cyan-500/10 text-cyan-600"
       />
+      <StatusPill
+        v-if="accountK12WorkspaceId(item)"
+        label="K12"
+        :title="`已切换到 K12 空间：${accountK12WorkspaceId(item)}`"
+        tone-class="border-violet-500/40 bg-violet-500/10 text-violet-600"
+      />
       <button
         type="button"
         class="text-left"
@@ -76,6 +82,7 @@ import AccountActionButtons from '@/components/ai/AccountActionButtons.vue'
 import type { Account } from '@/api/accounts'
 import {
   accountDetailItems,
+  accountK12WorkspaceId,
   accountPrimaryText,
   accountRowSignature,
   accountSecondaryText,

@@ -30,6 +30,11 @@
     <td class="py-4 pr-5 align-middle">
       <div class="space-y-1 text-xs">
         <p class="font-medium text-foreground">{{ accountSourceText(item) }}</p>
+        <p
+          v-if="accountK12WorkspaceId(item)"
+          class="font-mono text-violet-600"
+          :title="`已切换到 K12 空间：${accountK12WorkspaceId(item)}`"
+        >K12 ✓</p>
       </div>
     </td>
     <td class="py-4 pr-5 align-middle">
@@ -89,6 +94,7 @@ import QuotaBadge from '@/components/ai/QuotaBadge.vue'
 import type { Account } from '@/api/accounts'
 import {
   accountCreatedText,
+  accountK12WorkspaceId,
   accountPrimaryText,
   accountRestoreText,
   accountRowSignature,

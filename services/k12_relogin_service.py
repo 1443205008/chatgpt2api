@@ -236,6 +236,7 @@ def _relogin_one(
             updates["refresh_token"] = new_refresh_token
         if new_id_token:
             updates["id_token"] = new_id_token
+        updates["workspace_id"] = workspace_id
 
         account_service.update_account(access_token, updates, quiet=True)
         _update_progress(progress_id, success=True)
@@ -264,7 +265,7 @@ def relogin_accounts_async(
 
     def _run():
         import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
             futures = [
                 executor.submit(_relogin_one, account, workspace_id, proxy, progress_id)
                 for account in accounts
