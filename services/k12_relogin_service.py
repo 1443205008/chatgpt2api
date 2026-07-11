@@ -141,25 +141,33 @@ def _relogin_one(
     registrar = PlatformRegistrar(proxy)
     try:
         mailbox = create_mailbox(username=email, register_proxy=proxy)
+        mailbox["address"] = email
 
-        # Step 1 — authorize (start PKCE session)
+        # Step 1 — start PKCE session
         registrar._platform_authorize(email, 0, screen_hint="login_or_signup")
 
-        # Step 2 — advance login with email
-        registrar._authorize_continue_login(email, 0)
+        # Steps 2-4: Microsoft passwordless OTP, retry once on invalid_state 409
+        resp = None
+        err = ""
+        for attempt in range(2):
+            if attempt:
+                # Session expired; reset and re-authorize before retrying
+                registrar._reset_auth_cookies()
+                registrar._platform_authorize(email, 0, screen_hint="login_or_signup")
 
-        # Step 3 — send OTP; mark timestamp so we skip older messages
-        mailbox["_received_after"] = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
-        registrar._send_passwordless_otp(0)
+            registrar._authorize_continue_login(email, 0)
+            mailbox["_received_after"] = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
+            registrar._send_passwordless_otp(0)
 
-        # Step 4 — wait for OTP code
-        code = wait_for_code(mailbox, register_proxy=proxy)
-        if not code:
-            raise RuntimeError("等待邮箱验证码超时")
+            code = wait_for_code(mailbox, register_proxy=proxy)
+            if not code:
+                raise RuntimeError("等待邮箱验证码超时")
 
-        # Step 5 — validate OTP, get continue_url
-        resp, err = validate_otp(registrar.session, registrar.device_id, code, registrar.fingerprint)
-        if resp is None or resp.status_code != 200:
+            resp, err = validate_otp(registrar.session, registrar.device_id, code, registrar.fingerprint)
+            if resp is not None and resp.status_code == 200:
+                break
+            if attempt == 0 and registrar._is_passwordless_invalid_state(resp):
+                continue
             body = ""
             try:
                 body = (resp.text or "")[:300] if resp is not None else ""
