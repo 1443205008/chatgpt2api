@@ -143,43 +143,60 @@ def _relogin_one(
         mailbox = create_mailbox(username=email, register_proxy=proxy)
         mailbox["address"] = email
 
-        # Step 1 — start PKCE session
-        registrar._platform_authorize(email, 0, screen_hint="login_or_signup")
+        # Step 1 — start PKCE session; returns "login" for Microsoft accounts,
+        # or "email-verification" / None for native passwordless accounts.
+        mailbox["_received_after"] = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
+        landed = registrar._platform_authorize(email, 0, screen_hint="login_or_signup")
 
-        # Steps 2-4: Microsoft passwordless OTP, retry once on invalid_state 409
+        # Steps 2-4: OTP flow branches on landed page type.
+        #   "login"  → Microsoft account: need _authorize_continue_login + _send_passwordless_otp
+        #   otherwise → already in native passwordless state after _platform_authorize
         resp = None
-        err = ""
-        for attempt in range(2):
-            if attempt:
-                # Session expired between authorize and send-otp; reset and retry
-                registrar._reset_auth_cookies()
-                registrar._platform_authorize(email, 0, screen_hint="login_or_signup")
+        if landed == "login":
+            for attempt in range(2):
+                if attempt:
+                    registrar._reset_auth_cookies()
+                    mailbox["_received_after"] = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
+                    registrar._platform_authorize(email, 0, screen_hint="login_or_signup")
 
-            registrar._authorize_continue_login(email, 0)
-            mailbox["_received_after"] = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
-            try:
-                registrar._send_passwordless_otp(0)
-            except RuntimeError as send_err:
-                msg = str(send_err)
-                if attempt == 0 and ("invalid_state" in msg or "no longer valid" in msg):
+                registrar._authorize_continue_login(email, 0)
+                mailbox["_received_after"] = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
+                try:
+                    registrar._send_passwordless_otp(0)
+                except RuntimeError as send_err:
+                    msg = str(send_err)
+                    if attempt == 0 and ("invalid_state" in msg or "no longer valid" in msg):
+                        continue
+                    raise
+
+                code = wait_for_code(mailbox, register_proxy=proxy)
+                if not code:
+                    raise RuntimeError("等待邮箱验证码超时")
+
+                resp, err = validate_otp(registrar.session, registrar.device_id, code, registrar.fingerprint)
+                if resp is not None and resp.status_code == 200:
+                    break
+                if attempt == 0 and registrar._is_passwordless_invalid_state(resp):
                     continue
-                raise
-
+                body = ""
+                try:
+                    body = (resp.text or "")[:300] if resp is not None else ""
+                except Exception:
+                    pass
+                raise RuntimeError(err or f"OTP 验证失败 HTTP {getattr(resp, 'status_code', '?')}: {body}")
+        else:
+            # Native passwordless: _platform_authorize already triggered OTP email
             code = wait_for_code(mailbox, register_proxy=proxy)
             if not code:
                 raise RuntimeError("等待邮箱验证码超时")
-
             resp, err = validate_otp(registrar.session, registrar.device_id, code, registrar.fingerprint)
-            if resp is not None and resp.status_code == 200:
-                break
-            if attempt == 0 and registrar._is_passwordless_invalid_state(resp):
-                continue
-            body = ""
-            try:
-                body = (resp.text or "")[:300] if resp is not None else ""
-            except Exception:
-                pass
-            raise RuntimeError(err or f"OTP 验证失败 HTTP {getattr(resp, 'status_code', '?')}: {body}")
+            if resp is None or resp.status_code != 200:
+                body = ""
+                try:
+                    body = (resp.text or "")[:300] if resp is not None else ""
+                except Exception:
+                    pass
+                raise RuntimeError(err or f"OTP 验证失败 HTTP {getattr(resp, 'status_code', '?')}: {body}")
 
         data = _response_json(resp)
         continue_url = str(data.get("continue_url") or "").strip()
