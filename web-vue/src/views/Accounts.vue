@@ -907,6 +907,7 @@ const {
   runBulkAction,
   bindSelectedAccountsToGroup,
   exportAccounts,
+  exportK12Accounts,
 } = useAccountsPage()
 
 const {
@@ -971,6 +972,7 @@ const {
   openCreateModal,
   openImportModal,
   exportAccounts,
+  exportK12Accounts,
   refreshAllAccounts,
   runBulkAction,
   bindSelectedAccountsToGroup,

@@ -1860,6 +1860,34 @@ class AccountService:
             items.append(item)
         return items
 
+    def build_k12_export_items(self, access_tokens: list[str] | None = None) -> list[dict]:
+        """Export accounts that have been switched to a K12 workspace.
+
+        Returns a list of objects in the format expected by the K12 workspace
+        session import tool:
+          {"accessToken": "...", "user": {}, "account": {"id": "<workspace_id>"}}
+        """
+        target_tokens = set(token for token in (access_tokens or []) if token)
+        with self._lock:
+            accounts = [
+                dict(item)
+                for item in self._accounts.values()
+                if not target_tokens or str(item.get("access_token") or "") in target_tokens
+            ]
+
+        items: list[dict] = []
+        for account in accounts:
+            access_token = str(account.get("access_token") or "").strip()
+            workspace_id = str(account.get("workspace_id") or "").strip()
+            if not access_token or not workspace_id:
+                continue
+            items.append({
+                "accessToken": access_token,
+                "user": {},
+                "account": {"id": workspace_id},
+            })
+        return items
+
     def get_stats(self) -> dict:
         with self._lock:
             items = list(self._accounts.values())

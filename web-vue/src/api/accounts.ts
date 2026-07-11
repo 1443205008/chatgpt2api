@@ -816,8 +816,8 @@ export const accountsApi = {
     onProgress?: (progress: AccountRefreshProgress) => void,
   ) => refreshAndPollWithProgress([], onProgress, { all: true }),
 
-  exportAccounts: (accountIdsOrTokens: string[], format: 'json' | 'zip' = 'json') =>
-    apiClient.post<{ access_tokens: string[]; format: 'json' | 'zip' }, Blob>('/api/accounts/export', {
+  exportAccounts: (accountIdsOrTokens: string[], format: 'json' | 'zip' | 'k12_json' = 'json') =>
+    apiClient.post<{ access_tokens: string[]; format: 'json' | 'zip' | 'k12_json' }, Blob>('/api/accounts/export', {
       access_tokens: Array.from(new Set(accountIdsOrTokens.map(resolveToken).filter(Boolean))),
       format,
     }, {

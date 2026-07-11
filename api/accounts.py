@@ -68,7 +68,7 @@ class AccountRefreshRequest(BaseModel):
 
 class AccountExportRequest(BaseModel):
     access_tokens: list[str] = Field(default_factory=list)
-    format: Literal["json", "zip"] = "json"
+    format: Literal["json", "zip", "k12_json"] = "json"
 
 
 class AccountUpdateRequest(BaseModel):
@@ -702,6 +702,19 @@ def create_router() -> APIRouter:
             )
 
         timestamp = _download_timestamp()
+        if body.format == "k12_json":
+            items_k12 = account_service.build_k12_export_items(access_tokens)
+            if not items_k12:
+                raise HTTPException(
+                    status_code=400,
+                    detail={"error": "没有可导出的 K12 账号（需要有 access_token 和 workspace_id）"},
+                )
+            return Response(
+                json.dumps(items_k12, ensure_ascii=False, indent=2) + "\n",
+                media_type="application/json",
+                headers={"Content-Disposition": f'attachment; filename="k12-accounts-{timestamp}.json"'},
+            )
+
         if body.format == "zip":
             content = _account_zip_bytes(items)
             return Response(

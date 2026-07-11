@@ -214,6 +214,7 @@ export function useAccountsPage() {
   })
   const exportBusy = accountExport.exportBusy
   const exportAccounts = accountExport.exportAccounts
+  const exportK12Accounts = accountExport.exportK12Accounts
 
   const accountImport = useAccountImportRuntime({
     bulkProgress,
@@ -455,5 +456,6 @@ export function useAccountsPage() {
     runBulkAction,
     bindSelectedAccountsToGroup,
     exportAccounts,
+    exportK12Accounts,
   }
 }

@@ -33,6 +33,7 @@ type AccountActionMenuRuntimeOptions = {
   openCreateModal: () => void
   openImportModal: (mode: AccountImportMode) => void
   exportAccounts: (scope: AccountExportScope) => Promise<void>
+  exportK12Accounts: (scope: AccountExportScope) => Promise<void>
   refreshAllAccounts: () => Promise<void>
   runBulkAction: (action: AccountBulkAction) => Promise<void>
   bindSelectedAccountsToGroup: () => Promise<void>
@@ -126,6 +127,18 @@ export function useAccountActionMenuRuntime(options: AccountActionMenuRuntimeOpt
         disabled: options.accountAllTotal.value === 0,
       },
     ],
+    [
+      {
+        key: 'k12_selected',
+        label: `导出选中 K12 格式${options.selectedCount.value ? ` (${options.selectedCount.value})` : ''}`,
+        disabled: options.selectedCount.value === 0,
+      },
+      {
+        key: 'k12_all',
+        label: '导出全部 K12 格式',
+        disabled: options.accountAllTotal.value === 0,
+      },
+    ],
   ))
 
   const batchMenuItems = computed<AccountActionMenuItem[]>(() => actionMenuGroups<AccountActionMenuItem>(
@@ -206,6 +219,14 @@ export function useAccountActionMenuRuntime(options: AccountActionMenuRuntimeOpt
   async function handleExportAction(key: string) {
     if (key === 'selected' || key === 'all') {
       await options.exportAccounts(key)
+      return
+    }
+    if (key === 'k12_selected') {
+      await options.exportK12Accounts('selected')
+      return
+    }
+    if (key === 'k12_all') {
+      await options.exportK12Accounts('all')
     }
   }
 

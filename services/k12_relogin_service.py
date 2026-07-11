@@ -224,21 +224,26 @@ def _relogin_one(
             detail = "；".join(errors[-3:]) if errors else "exchange_tokens 未返回 token"
             raise RuntimeError(f"token 换取失败: {detail}")
 
-        # Step 8 — write tokens back
+        # Step 8 — write tokens back via proper token-rotation path
         new_access_token = str(tokens.get("access_token") or "").strip()
-        new_refresh_token = str(tokens.get("refresh_token") or "").strip()
-        new_id_token = str(tokens.get("id_token") or "").strip()
         if not new_access_token:
             raise RuntimeError("exchange 返回的 access_token 为空")
 
-        updates: dict[str, Any] = {"access_token": new_access_token}
+        token_data = {"access_token": new_access_token}
+        new_refresh_token = str(tokens.get("refresh_token") or "").strip()
+        new_id_token = str(tokens.get("id_token") or "").strip()
         if new_refresh_token:
-            updates["refresh_token"] = new_refresh_token
+            token_data["refresh_token"] = new_refresh_token
         if new_id_token:
-            updates["id_token"] = new_id_token
-        updates["workspace_id"] = workspace_id
+            token_data["id_token"] = new_id_token
 
-        account_service.update_account(access_token, updates, quiet=True)
+        # _apply_refreshed_tokens correctly rotates the key in the accounts dict
+        # (deletes old token key, sets alias, stores under new token).
+        # update_account cannot do this — it always forces the old token as the key.
+        final_token = account_service._apply_refreshed_tokens(access_token, token_data, "k12_relogin")
+
+        # Save workspace_id against the new token key
+        account_service.update_account(final_token, {"workspace_id": workspace_id}, quiet=True)
         _update_progress(progress_id, success=True)
 
     except Exception as exc:

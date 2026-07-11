@@ -114,8 +114,49 @@ export function useAccountExportRuntime(options: AccountExportRuntimeOptions) {
     }
   }
 
+  async function exportK12Accounts(scope: AccountExportScope = 'auto') {
+    const targetIds = new Set(scope === 'all' ? [] : options.selectedIds.value)
+    const targetAccounts = (targetIds.size
+      ? options.accounts.value.filter((item) => targetIds.has(item.id))
+      : options.accounts.value
+    ).filter((item) => item.workspace_id)
+
+    if (scope === 'selected' && targetIds.size === 0) {
+      toast.warning('请先选择要导出的账号')
+      return
+    }
+    if (!targetAccounts.length) {
+      toast.warning('没有已切换到 K12 空间的账号（需先完成"切换到 K12 空间"操作）')
+      return
+    }
+
+    const exportScopeLabel = targetIds.size === 0 ? '全部' : '选中'
+    const confirmed = await confirmDialog.ask({
+      title: '导出 K12 空间账号',
+      message: `即将导出 ${exportScopeLabel}已切换到 K12 空间的 ${targetAccounts.length} 个账号，格式为 [{accessToken, user, account:{id}}]，是否继续？`,
+      confirmText: '确认导出',
+      cancelText: '取消',
+    })
+    if (!confirmed) return
+
+    exportBusy.value = true
+    try {
+      const blob = await accountsApi.exportAccounts(
+        targetAccounts.map((item) => item.id),
+        'k12_json',
+      )
+      saveBlob(blob, createExportFilename('json').replace('accounts-export', 'k12-accounts'))
+      toast.success(`已导出 ${targetAccounts.length} 个 K12 账号`)
+    } catch (error) {
+      options.setError('导出失败', error)
+    } finally {
+      exportBusy.value = false
+    }
+  }
+
   return {
     exportBusy,
     exportAccounts,
+    exportK12Accounts,
   }
 }
