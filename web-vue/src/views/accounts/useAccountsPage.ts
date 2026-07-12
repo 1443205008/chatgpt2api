@@ -293,6 +293,7 @@ export function useAccountsPage() {
   const copyOAuthAuthorizeUrl = accountImport.copyOAuthAuthorizeUrl
   const finishOAuthLogin = accountImport.finishOAuthLogin
   const importLocalCPAFiles = accountImport.importLocalCPAFiles
+  const importTotpCsv = accountImport.importTotpCsv
 
   function closeRefreshProgress() {
     bulkProgress.close()
@@ -439,6 +440,7 @@ export function useAccountsPage() {
     copyOAuthAuthorizeUrl,
     finishOAuthLogin,
     importLocalCPAFiles,
+    importTotpCsv,
     refreshAllAccounts,
     refreshSelectedAccounts,
     requestStopRefreshProgress,

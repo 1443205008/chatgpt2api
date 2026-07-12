@@ -48,6 +48,7 @@ const accountImportActions = new Set<AccountImportMode>([
   'cpa_json',
   'remote_cpa',
   'sub2api',
+  'totp_csv',
 ])
 
 const accountBulkActions = new Set<AccountBulkAction>([
@@ -109,6 +110,7 @@ export function useAccountActionMenuRuntime(options: AccountActionMenuRuntimeOpt
       { key: 'cpa_json', label: '导入 CPA JSON 文件' },
       { key: 'remote_cpa', label: '从远程 CPA 服务器导入' },
       { key: 'sub2api', label: '从 Sub2API 服务器导入' },
+      { key: 'totp_csv', label: '导入 TOTP 凭证' },
     ],
   ))
 

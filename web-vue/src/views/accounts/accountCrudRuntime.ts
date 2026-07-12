@@ -13,6 +13,8 @@ export type AccountForm = {
   proxy: string
   quota: string
   status: AccountBackendStatus
+  password: string
+  mfa_secret: string
 }
 
 type AccountCrudRuntimeOptions = {
@@ -39,6 +41,8 @@ function createDefaultForm(): AccountForm {
     proxy: '',
     quota: '',
     status: '正常',
+    password: '',
+    mfa_secret: '',
   }
 }
 
@@ -87,6 +91,8 @@ export function useAccountCrudRuntime(options: AccountCrudRuntimeOptions) {
     form.proxy = item.proxy || ''
     form.quota = item.image_quota_unknown ? '' : String(item.quota ?? '')
     form.status = normalizeAccountBackendStatus(item.backend_status, item.enabled ? '正常' : '禁用')
+    form.password = item.password || ''
+    form.mfa_secret = item.mfa_secret || ''
     syncProxyControlsFromValue(form.proxy)
     void options.loadAccountGroups({ silentErrorToast: true })
     showModal.value = true
@@ -119,6 +125,8 @@ export function useAccountCrudRuntime(options: AccountCrudRuntimeOptions) {
         quota: normalizeQuota(form.quota),
         backend_status: form.status,
         enabled: form.status !== '禁用',
+        password: form.password.trim() || undefined,
+        mfa_secret: form.mfa_secret.trim() || undefined,
       })
       toast.success(isEditing ? `账号 ${accountIdForNotice} 已更新` : '账号已添加')
       closeModal()

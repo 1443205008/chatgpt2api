@@ -18,6 +18,8 @@ export interface Account {
   proxy?: string
   group_id?: string
   workspace_id?: string
+  password?: string
+  mfa_secret?: string
   quota?: number
   image_quota_unknown?: boolean
   name: string
@@ -387,6 +389,8 @@ function mapBackendAccount(item: BackendAccount, index: number, usedIds: Set<str
     proxy: cleanString(item.proxy),
     group_id: cleanString(item.group_id),
     workspace_id: cleanString(item.workspace_id),
+    password: cleanString(item.password),
+    mfa_secret: cleanString(item.mfa_secret),
     quota,
     image_quota_unknown: imageQuotaUnknown,
     name: email || `${type} / ${sourceType}`,
@@ -689,6 +693,8 @@ export const accountsApi = {
           quota?: number
           proxy?: string
           group_id?: string
+          password?: string
+          mfa_secret?: string
         },
         BackendAccountMutationResponse
       >('/api/accounts/update', {
@@ -699,6 +705,8 @@ export const accountsApi = {
         quota: account.quota,
         proxy: account.proxy,
         group_id: account.group_id,
+        ...(account.password ? { password: account.password } : {}),
+        ...(account.mfa_secret ? { mfa_secret: account.mfa_secret } : {}),
       })
       return {
         status: 'ok',
@@ -861,8 +869,7 @@ export const accountsApi = {
   bulkDelete: (accountIds: string[]) =>
     deleteAccountsByIds(accountIds),
 
-  joinK12Workspace: async (accountIdsOrTokens: string[], workspaceId: string) => {
-    const accessTokens = Array.from(new Set(accountIdsOrTokens.map(resolveToken).filter(Boolean)))
+  joinK12Workspace: async (accountIdsOrTokens: string[], workspaceId: string) => {    const accessTokens = Array.from(new Set(accountIdsOrTokens.map(resolveToken).filter(Boolean)))
     if (!accessTokens.length) {
       return { status: 'ok', success_count: 0, errors: [] as string[] }
     }
@@ -883,6 +890,18 @@ export const accountsApi = {
     onProgress?: (progress: AccountK12ReloginProgress) => void,
     proxy?: string,
   ) => reloginK12PollWithProgress(accountIdsOrTokens, workspaceId, onProgress, proxy),
+
+  importTotpCsv: async (raw: string) => {
+    const response = await apiClient.post<
+      { raw: string },
+      { updated: number; skipped: string[]; skipped_count: number }
+    >('/api/accounts/import-totp', { raw })
+    return {
+      updated: Number(response.updated || 0),
+      skipped: Array.isArray(response.skipped) ? response.skipped : [],
+      skipped_count: Number(response.skipped_count || 0),
+    }
+  },
 
   resolveCookie: async (_cookie: string) => ({
     status: 'unsupported',

@@ -79,6 +79,8 @@ class AccountUpdateRequest(BaseModel):
     quota: int | None = None
     proxy: str | None = None
     group_id: str | None = None
+    password: str | None = None
+    mfa_secret: str | None = None
 
 
 class AccountBatchUpdateRequest(BaseModel):
@@ -100,6 +102,17 @@ class AccountK12ReloginRequest(BaseModel):
     access_tokens: list[str] = Field(default_factory=list)
     workspace_id: str = ""
     proxy: str = ""
+
+
+class TotpImportEntry(BaseModel):
+    email: str = ""
+    password: str = ""
+    mfa_secret: str = ""
+
+
+class TotpImportRequest(BaseModel):
+    entries: list[TotpImportEntry] = Field(default_factory=list)
+    raw: str = ""  # raw text in email----password----mfa_secret format
 
 
 class AccountGroupRequest(BaseModel):
@@ -745,6 +758,8 @@ def create_router() -> APIRouter:
                 "quota": body.quota,
                 "proxy": body.proxy,
                 "group_id": body.group_id,
+                "password": body.password,
+                "mfa_secret": body.mfa_secret,
             }.items()
             if value is not None
         }
@@ -754,6 +769,62 @@ def create_router() -> APIRouter:
         if account is None:
             raise HTTPException(status_code=404, detail={"error": "account not found"})
         return {"item": account, "items": account_service.list_accounts()}
+
+    @router.post("/api/accounts/import-totp")
+    async def import_totp_credentials(body: TotpImportRequest, authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+
+        entries: list[dict] = []
+        # Parse raw text if provided (email----password----mfa_secret per line)
+        if body.raw:
+            for line in body.raw.splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = [p.strip() for p in line.split("----", 2)]
+                if len(parts) < 2:
+                    continue
+                entries.append({
+                    "email": parts[0],
+                    "password": parts[1] if len(parts) > 1 else "",
+                    "mfa_secret": parts[2] if len(parts) > 2 else "",
+                })
+        # Merge structured entries
+        for e in body.entries:
+            email = str(e.email or "").strip()
+            if email:
+                entries.append({"email": email, "password": str(e.password or "").strip(), "mfa_secret": str(e.mfa_secret or "").strip()})
+
+        if not entries:
+            raise HTTPException(status_code=400, detail={"error": "没有可解析的条目"})
+
+        updated = 0
+        skipped: list[str] = []
+        all_accounts = account_service.list_accounts()
+        email_to_tokens: dict[str, list[str]] = {}
+        for acc in all_accounts:
+            email = str(acc.get("email") or "").strip().lower()
+            if email:
+                email_to_tokens.setdefault(email, []).append(str(acc.get("access_token") or "").strip())
+
+        for entry in entries:
+            email = entry["email"].lower()
+            tokens = email_to_tokens.get(email, [])
+            if not tokens:
+                skipped.append(entry["email"])
+                continue
+            upd: dict = {}
+            if entry.get("password"):
+                upd["password"] = entry["password"]
+            if entry.get("mfa_secret"):
+                upd["mfa_secret"] = entry["mfa_secret"]
+            if not upd:
+                continue
+            for token in tokens:
+                if account_service.update_account(token, upd, quiet=True):
+                    updated += 1
+
+        return {"updated": updated, "skipped": skipped, "skipped_count": len(skipped)}
 
     @router.post("/api/accounts/batch-update")
     async def batch_update_accounts(body: AccountBatchUpdateRequest, authorization: str | None = Header(default=None)):

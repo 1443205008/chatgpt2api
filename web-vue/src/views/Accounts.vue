@@ -266,6 +266,26 @@
                       />
                     </label>
                     <label class="text-xs">
+                      <span class="ui-field-label">登录密码</span>
+                      <Input
+                        :model-value="form.password"
+                        block
+                        root-class="font-mono"
+                        placeholder="账号登录密码（MFA 登录时使用）"
+                        @update:model-value="form.password = $event"
+                      />
+                    </label>
+                    <label class="text-xs">
+                      <span class="ui-field-label">MFA 密钥 (TOTP)</span>
+                      <Input
+                        :model-value="form.mfa_secret"
+                        block
+                        root-class="font-mono"
+                        placeholder="Base32 TOTP 密钥，如 JBSWY3DPEHPK3PXP"
+                        @update:model-value="form.mfa_secret = $event.trim().toUpperCase()"
+                      />
+                    </label>
+                    <label class="text-xs">
                       <span class="ui-field-label">账号组</span>
                       <GroupedSelectMenu
                         v-model="form.group_id"
@@ -639,6 +659,25 @@
                     @imported="handleRemoteImportDone"
                   />
                 </div>
+
+                <div v-else-if="importMode === 'totp_csv'" class="space-y-3">
+                  <ImportModePanel
+                    title="导入 TOTP 凭证"
+                    description="按行粘贴，格式：邮箱----密码----MFA密钥（Base32），会匹配已有账号的 email 字段并更新密码和 MFA 密钥。"
+                  />
+                  <textarea
+                    v-model.trim="manualTokenText"
+                    rows="10"
+                    class="ui-textarea-sm font-mono"
+                    placeholder="BeauMatlock8616@outlook.com----pAdCnMDa5QghN74Q----RCDFBQGTAKHXEW2NRT2ZENEOFJFFGXSE
+BeauFrost9568@outlook.com----1H6J82VzYZtuya3@----T5YQWOXGL7YJGBGFQKHCR7DS32PVRHND"
+                  />
+                  <div class="flex justify-end">
+                    <Button size="xs" variant="primary" :disabled="importBusy || !manualTokenText.trim()" @click="importTotpCsv">
+                      {{ importBusy ? '导入中...' : '开始导入' }}
+                    </Button>
+                  </div>
+                </div>
               </div>
             </div>
     </ModalShell>
@@ -892,6 +931,7 @@ const {
   copyOAuthAuthorizeUrl,
   finishOAuthLogin,
   importLocalCPAFiles,
+  importTotpCsv,
   refreshAllAccounts,
   requestStopRefreshProgress,
   closeRefreshProgress,

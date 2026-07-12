@@ -6,7 +6,7 @@ import { useConfirmDialog } from '@/composables/useConfirmDialog'
 import { useToast } from '@/composables/useToast'
 import type { useAccountBulkProgressRuntime } from './accountBulkProgressRuntime'
 
-export type AccountImportMode = 'oauth_login' | 'access_token' | 'session_json' | 'cpa_json' | 'remote_cpa' | 'sub2api'
+export type AccountImportMode = 'oauth_login' | 'access_token' | 'session_json' | 'cpa_json' | 'remote_cpa' | 'sub2api' | 'totp_csv'
 
 const IMPORT_BATCH_SIZE = 20
 
@@ -95,6 +95,7 @@ export function useAccountImportRuntime(options: AccountImportRuntimeOptions) {
     { label: '导入 CPA JSON 文件', value: 'cpa_json' },
     { label: '从远程 CPA 服务器导入', value: 'remote_cpa' },
     { label: '从 Sub2API 服务器导入', value: 'sub2api' },
+    { label: '导入 TOTP 凭证', value: 'totp_csv' },
   ] as const
 
   function setImportMode(mode: AccountImportMode) {
@@ -249,6 +250,33 @@ export function useAccountImportRuntime(options: AccountImportRuntimeOptions) {
     await importTokenBatch(parseSessionJsonTokens(sessionJsonText.value), 'session_json', '导入 Session JSON')
   }
 
+  async function importTotpCsv() {
+    const raw = manualTokenText.value.trim()
+    if (!raw) {
+      toast.warning('请先粘贴 TOTP 凭证内容')
+      return
+    }
+    importBusy.value = true
+    try {
+      const result = await accountsApi.importTotpCsv(raw)
+      const msg = result.skipped_count > 0
+        ? `更新 ${result.updated} 个账号，${result.skipped_count} 个邮箱未匹配到账号`
+        : `已更新 ${result.updated} 个账号的密码和 MFA 密钥`
+      if (result.updated > 0) {
+        toast.success(msg)
+      } else {
+        toast.warning(msg)
+      }
+      manualTokenText.value = ''
+      showImportModal.value = false
+      await options.loadData({ silentErrorToast: true })
+    } catch (error) {
+      options.setError('导入 TOTP 凭证失败', error)
+    } finally {
+      importBusy.value = false
+    }
+  }
+
   async function startOAuthLogin() {
     importBusy.value = true
     try {
@@ -370,5 +398,6 @@ export function useAccountImportRuntime(options: AccountImportRuntimeOptions) {
     copyOAuthAuthorizeUrl,
     finishOAuthLogin,
     importLocalCPAFiles,
+    importTotpCsv,
   }
 }
