@@ -255,7 +255,9 @@ def _relogin_one(
         resp = None
         for attempt in range(2):
             if attempt:
-                # Session went invalid — reset and retry
+                # Session went invalid — wait briefly to avoid 429, then reset and retry
+                import time
+                time.sleep(3)
                 registrar._reset_auth_cookies()
                 if mailbox:
                     mailbox["_received_after"] = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
