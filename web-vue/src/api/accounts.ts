@@ -497,6 +497,8 @@ function accountFromPayload(payload: Partial<Account>) {
     group_id: payload.group_id,
     quota: payload.quota,
     status: backendStatusForPayload(payload),
+    password: payload.password,
+    mfa_secret: payload.mfa_secret,
   }
 }
 
