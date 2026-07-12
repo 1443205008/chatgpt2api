@@ -118,6 +118,7 @@ export function accountRowSignature(item: Account): string {
     item.source_type,
     item.group_id,
     item.workspace_id,
+    item.mfa_secret ? '2fa' : '',
     item.proxy,
     item.backend_status,
     item.image_quota_unknown ? 1 : 0,
@@ -578,6 +579,10 @@ export function accountSourceText(item: Account): string {
 
 export function accountK12WorkspaceId(item: Account): string {
   return cleanString(item.workspace_id)
+}
+
+export function accountHas2FA(item: Account): boolean {
+  return Boolean(cleanString(item.mfa_secret))
 }
 
 export function accountProxyText(item: Account): string {

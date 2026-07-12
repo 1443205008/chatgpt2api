@@ -39,6 +39,12 @@
         :title="`已切换到 K12 空间：${accountK12WorkspaceId(item)}`"
         tone-class="border-violet-500/40 bg-violet-500/10 text-violet-600"
       />
+      <StatusPill
+        v-if="accountHas2FA(item)"
+        label="2FA"
+        title="已绑定 TOTP 双因素验证"
+        tone-class="border-amber-500/40 bg-amber-500/10 text-amber-600"
+      />
       <button
         type="button"
         class="text-left"
@@ -82,6 +88,7 @@ import AccountActionButtons from '@/components/ai/AccountActionButtons.vue'
 import type { Account } from '@/api/accounts'
 import {
   accountDetailItems,
+  accountHas2FA,
   accountK12WorkspaceId,
   accountPrimaryText,
   accountRowSignature,

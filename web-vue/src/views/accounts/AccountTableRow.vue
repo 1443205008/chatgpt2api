@@ -35,6 +35,11 @@
           class="font-mono text-violet-600"
           :title="`已切换到 K12 空间：${accountK12WorkspaceId(item)}`"
         >K12 ✓</p>
+        <p
+          v-if="accountHas2FA(item)"
+          class="text-amber-600"
+          title="已绑定 TOTP 双因素验证"
+        >2FA ✓</p>
       </div>
     </td>
     <td class="py-4 pr-5 align-middle">
@@ -94,6 +99,7 @@ import QuotaBadge from '@/components/ai/QuotaBadge.vue'
 import type { Account } from '@/api/accounts'
 import {
   accountCreatedText,
+  accountHas2FA,
   accountK12WorkspaceId,
   accountPrimaryText,
   accountRestoreText,

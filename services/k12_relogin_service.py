@@ -238,39 +238,19 @@ def _relogin_one(
 
         password = str(account.get("password") or "").strip()
         mfa_secret = str(account.get("mfa_secret") or "").strip()
+        use_password_flow = bool(password and mfa_secret)
 
-        # ── Step 1: start PKCE session ───────────────────────────────────────
-        mailbox = None
-        if not (password and mfa_secret):
-            # Create mailbox early only for OTP flow so the timestamp is tight
-            mailbox = create_mailbox(username=email, register_proxy=proxy)
-            mailbox["address"] = email
-            mailbox["_received_after"] = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
-
-        landed = registrar._platform_authorize(email, 0, screen_hint="login_or_signup")
-
-        # ── Step 2: submit email, determine account type from response ────────
-        # For both flows we submit the email first; the response page.type tells
-        # us whether to proceed with native password or OTP.
-        resp = None
-        for attempt in range(2):
-            if attempt:
-                # Session went invalid — wait briefly to avoid 429, then reset and retry
-                import time
-                time.sleep(3)
-                registrar._reset_auth_cookies()
-                if mailbox:
-                    mailbox["_received_after"] = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
-                registrar._platform_authorize(email, 0, screen_hint="login_or_signup")
-
+        if use_password_flow:
+            # ── Flow B: password + TOTP MFA ───────────────────────────────────
+            # Only tried when both password and mfa_secret are stored.
+            # _authorize_continue_login reveals whether the account is in native
+            # password state; if not (e.g. Microsoft OAuth), we fall through to
+            # Flow A below.
+            registrar._platform_authorize(email, 0, screen_hint="login_or_signup")
             continue_data = registrar._authorize_continue_login(email, 0)
-
-            # page.type indicates the next required action
             page_type = str(((continue_data.get("page") or {}).get("type") or "")).lower()
-            is_password_page = "password" in page_type  # e.g. "password_verification"
 
-            if password and mfa_secret and is_password_page:
-                # ── Flow B: native password + TOTP MFA ───────────────────────
+            if "password" in page_type:
                 pwd_data = _submit_password(registrar, password)
                 continue_url = str(pwd_data.get("continue_url") or "").strip()
                 pwd_page_type = str(((pwd_data.get("page") or {}).get("type") or "")).lower()
@@ -278,14 +258,64 @@ def _relogin_one(
                     continue_url = _handle_mfa_challenge(registrar, continue_url, mfa_secret)
                 if not continue_url:
                     continue_url = f"{auth_base}/sign-in-with-chatgpt/platform/consent"
-                break  # done
-            else:
-                # ── Flow A: email OTP ─────────────────────────────────────────
-                # Ensure mailbox exists (was skipped if password+mfa_secret set)
-                if mailbox is None:
-                    mailbox = create_mailbox(username=email, register_proxy=proxy)
-                    mailbox["address"] = email
 
+                # workspace select + token exchange follows below
+                updated_url = _select_workspace(registrar, workspace_id, continue_url)
+                if updated_url:
+                    continue_url = updated_url
+
+                errors: list[str] = []
+                tokens = exchange_tokens_from_continue_url(
+                    registrar.session,
+                    registrar.device_id,
+                    registrar.code_verifier,
+                    continue_url,
+                    proxy,
+                    registrar.clearance_user_agent,
+                    errors,
+                    registrar.fingerprint,
+                )
+                if not tokens:
+                    detail = "；".join(errors[-3:]) if errors else "exchange_tokens 未返回 token"
+                    raise RuntimeError(f"token 换取失败: {detail}")
+
+                new_access_token = str(tokens.get("access_token") or "").strip()
+                if not new_access_token:
+                    raise RuntimeError("exchange 返回的 access_token 为空")
+
+                token_data: dict[str, Any] = {"access_token": new_access_token}
+                new_refresh_token = str(tokens.get("refresh_token") or "").strip()
+                new_id_token = str(tokens.get("id_token") or "").strip()
+                if new_refresh_token:
+                    token_data["refresh_token"] = new_refresh_token
+                if new_id_token:
+                    token_data["id_token"] = new_id_token
+
+                final_token = account_service._apply_refreshed_tokens(access_token, token_data, "k12_relogin")
+                account_service.update_account(final_token, {"workspace_id": workspace_id}, quiet=True)
+                _update_progress(progress_id, success=True)
+                return
+
+            # Not in password state (e.g. Microsoft account) — reset and fall
+            # through to Flow A so the session is clean.
+            registrar._reset_auth_cookies()
+
+        # ── Flow A: email OTP (original working logic, unchanged) ─────────────
+        mailbox = create_mailbox(username=email, register_proxy=proxy)
+        mailbox["address"] = email
+        mailbox["_received_after"] = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
+        landed = registrar._platform_authorize(email, 0, screen_hint="login_or_signup")
+
+        resp = None
+        if landed == "login":
+            # Microsoft account: _authorize_continue_login + _send_passwordless_otp
+            for attempt in range(2):
+                if attempt:
+                    registrar._reset_auth_cookies()
+                    mailbox["_received_after"] = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
+                    registrar._platform_authorize(email, 0, screen_hint="login_or_signup")
+
+                registrar._authorize_continue_login(email, 0)
                 mailbox["_received_after"] = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
                 try:
                     registrar._send_passwordless_otp(0)
@@ -311,14 +341,23 @@ def _relogin_one(
                     pass
                 raise RuntimeError(err or f"OTP 验证失败 HTTP {getattr(resp, 'status_code', '?')}: {body}")
         else:
-            raise RuntimeError("登录重试超过上限")
+            # Native passwordless: _platform_authorize already triggered OTP email
+            code = wait_for_code(mailbox, register_proxy=proxy)
+            if not code:
+                raise RuntimeError("等待邮箱验证码超时")
+            resp, err = validate_otp(registrar.session, registrar.device_id, code, registrar.fingerprint)
+            if resp is None or resp.status_code != 200:
+                body = ""
+                try:
+                    body = (resp.text or "")[:300] if resp is not None else ""
+                except Exception:
+                    pass
+                raise RuntimeError(err or f"OTP 验证失败 HTTP {getattr(resp, 'status_code', '?')}: {body}")
 
-        if resp is not None:
-            # OTP path: get continue_url from validate_otp response
-            data = _response_json(resp)
-            continue_url = str(data.get("continue_url") or "").strip()
-            if not continue_url:
-                continue_url = f"{auth_base}/sign-in-with-chatgpt/platform/consent"
+        data = _response_json(resp)
+        continue_url = str(data.get("continue_url") or "").strip()
+        if not continue_url:
+            continue_url = f"{auth_base}/sign-in-with-chatgpt/platform/consent"
 
         # Step 6 — select workspace
         updated_url = _select_workspace(registrar, workspace_id, continue_url)
