@@ -236,79 +236,83 @@ def _relogin_one(
     try:
         continue_url: str
 
-        if password and mfa_secret:
-            # ── Flow B: password + TOTP MFA ──────────────────────────────────
-            registrar._platform_authorize(email, 0, screen_hint="login_or_signup")
-            registrar._authorize_continue_login(email, 0)
+        password = str(account.get("password") or "").strip()
+        mfa_secret = str(account.get("mfa_secret") or "").strip()
 
-            pwd_data = _submit_password(registrar, password)
-            continue_url = str(pwd_data.get("continue_url") or "").strip()
-
-            # Detect MFA requirement: page.type contains "mfa" OR URL has /mfa-challenge/
-            page_type = str(((pwd_data.get("page") or {}).get("type") or "")).lower()
-            if "mfa" in page_type or "/mfa-challenge/" in continue_url:
-                continue_url = _handle_mfa_challenge(registrar, continue_url, mfa_secret)
-
-            if not continue_url:
-                continue_url = f"{auth_base}/sign-in-with-chatgpt/platform/consent"
-        else:
-            # ── Flow A: email OTP ─────────────────────────────────────────────
+        # ── Step 1: start PKCE session ───────────────────────────────────────
+        mailbox = None
+        if not (password and mfa_secret):
+            # Create mailbox early only for OTP flow so the timestamp is tight
             mailbox = create_mailbox(username=email, register_proxy=proxy)
             mailbox["address"] = email
-
-            # Step 1 — start PKCE session; returns "login" for Microsoft accounts,
-            # or "email-verification" / None for native passwordless accounts.
             mailbox["_received_after"] = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
-            landed = registrar._platform_authorize(email, 0, screen_hint="login_or_signup")
 
-            resp = None
-            if landed == "login":
-                # Microsoft account: need _authorize_continue_login + _send_passwordless_otp
-                for attempt in range(2):
-                    if attempt:
-                        registrar._reset_auth_cookies()
-                        mailbox["_received_after"] = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
-                        registrar._platform_authorize(email, 0, screen_hint="login_or_signup")
+        landed = registrar._platform_authorize(email, 0, screen_hint="login_or_signup")
 
-                    registrar._authorize_continue_login(email, 0)
+        # ── Step 2: submit email, determine account type from response ────────
+        # For both flows we submit the email first; the response page.type tells
+        # us whether to proceed with native password or OTP.
+        resp = None
+        for attempt in range(2):
+            if attempt:
+                # Session went invalid — reset and retry
+                registrar._reset_auth_cookies()
+                if mailbox:
                     mailbox["_received_after"] = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
-                    try:
-                        registrar._send_passwordless_otp(0)
-                    except RuntimeError as send_err:
-                        msg = str(send_err)
-                        if attempt == 0 and ("invalid_state" in msg or "no longer valid" in msg):
-                            continue
-                        raise
+                registrar._platform_authorize(email, 0, screen_hint="login_or_signup")
 
-                    code = wait_for_code(mailbox, register_proxy=proxy)
-                    if not code:
-                        raise RuntimeError("等待邮箱验证码超时")
+            continue_data = registrar._authorize_continue_login(email, 0)
 
-                    resp, err = validate_otp(registrar.session, registrar.device_id, code, registrar.fingerprint)
-                    if resp is not None and resp.status_code == 200:
-                        break
-                    if attempt == 0 and registrar._is_passwordless_invalid_state(resp):
-                        continue
-                    body = ""
-                    try:
-                        body = (resp.text or "")[:300] if resp is not None else ""
-                    except Exception:
-                        pass
-                    raise RuntimeError(err or f"OTP 验证失败 HTTP {getattr(resp, 'status_code', '?')}: {body}")
+            # page.type indicates the next required action
+            page_type = str(((continue_data.get("page") or {}).get("type") or "")).lower()
+            is_password_page = "password" in page_type  # e.g. "password_verification"
+
+            if password and mfa_secret and is_password_page:
+                # ── Flow B: native password + TOTP MFA ───────────────────────
+                pwd_data = _submit_password(registrar, password)
+                continue_url = str(pwd_data.get("continue_url") or "").strip()
+                pwd_page_type = str(((pwd_data.get("page") or {}).get("type") or "")).lower()
+                if "mfa" in pwd_page_type or "/mfa-challenge/" in continue_url:
+                    continue_url = _handle_mfa_challenge(registrar, continue_url, mfa_secret)
+                if not continue_url:
+                    continue_url = f"{auth_base}/sign-in-with-chatgpt/platform/consent"
+                break  # done
             else:
-                # Native passwordless: _platform_authorize already triggered OTP email
+                # ── Flow A: email OTP ─────────────────────────────────────────
+                # Ensure mailbox exists (was skipped if password+mfa_secret set)
+                if mailbox is None:
+                    mailbox = create_mailbox(username=email, register_proxy=proxy)
+                    mailbox["address"] = email
+
+                mailbox["_received_after"] = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
+                try:
+                    registrar._send_passwordless_otp(0)
+                except RuntimeError as send_err:
+                    msg = str(send_err)
+                    if attempt == 0 and ("invalid_state" in msg or "no longer valid" in msg):
+                        continue
+                    raise
+
                 code = wait_for_code(mailbox, register_proxy=proxy)
                 if not code:
                     raise RuntimeError("等待邮箱验证码超时")
-                resp, err = validate_otp(registrar.session, registrar.device_id, code, registrar.fingerprint)
-                if resp is None or resp.status_code != 200:
-                    body = ""
-                    try:
-                        body = (resp.text or "")[:300] if resp is not None else ""
-                    except Exception:
-                        pass
-                    raise RuntimeError(err or f"OTP 验证失败 HTTP {getattr(resp, 'status_code', '?')}: {body}")
 
+                resp, err = validate_otp(registrar.session, registrar.device_id, code, registrar.fingerprint)
+                if resp is not None and resp.status_code == 200:
+                    break
+                if attempt == 0 and registrar._is_passwordless_invalid_state(resp):
+                    continue
+                body = ""
+                try:
+                    body = (resp.text or "")[:300] if resp is not None else ""
+                except Exception:
+                    pass
+                raise RuntimeError(err or f"OTP 验证失败 HTTP {getattr(resp, 'status_code', '?')}: {body}")
+        else:
+            raise RuntimeError("登录重试超过上限")
+
+        if resp is not None:
+            # OTP path: get continue_url from validate_otp response
             data = _response_json(resp)
             continue_url = str(data.get("continue_url") or "").strip()
             if not continue_url:
