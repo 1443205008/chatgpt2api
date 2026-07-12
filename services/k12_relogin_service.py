@@ -34,6 +34,7 @@ from services.register.openai_register import (
     validate_otp,
     wait_for_code,
     _response_json,
+    extract_continue_url,
     auth_base,
     _headers_with_clearance,
     _header_fingerprint,
@@ -169,7 +170,11 @@ def _handle_mfa_challenge(registrar: PlatformRegistrar, continue_url: str, mfa_s
         raise RuntimeError(error or f"MFA 验证失败 HTTP {getattr(resp, 'status_code', '?')}: {body}")
 
     data = _response_json(resp)
-    new_url = str(data.get("continue_url") or "").strip()
+    # extract_continue_url checks continue_url, continueUrl, page.payload.*, etc.
+    new_url = extract_continue_url(data)
+    # Fallback: some endpoints return the next URL in the Location header (302)
+    if not new_url:
+        new_url = str((getattr(resp, "headers", {}) or {}).get("Location") or "").strip()
     return new_url or continue_url
 
 
@@ -358,6 +363,12 @@ def _relogin_one(
         continue_url = str(data.get("continue_url") or "").strip()
         if not continue_url:
             continue_url = f"{auth_base}/sign-in-with-chatgpt/platform/consent"
+
+        # MFA challenge may appear after OTP validation (not instead of it).
+        # If continue_url points to /mfa-challenge/ and we have mfa_secret, resolve it.
+        otp_page_type = str(((data.get("page") or {}).get("type") or "")).lower()
+        if mfa_secret and ("mfa" in otp_page_type or "/mfa-challenge/" in continue_url):
+            continue_url = _handle_mfa_challenge(registrar, continue_url, mfa_secret)
 
         # Step 6 — select workspace
         updated_url = _select_workspace(registrar, workspace_id, continue_url)
