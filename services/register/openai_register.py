@@ -34,16 +34,18 @@ config = {
     "proxy": "",
     "total": 10,
     "threads": 3,
+    "register_flow": "chatgpt",  # "chatgpt" | "pkce"
 }
 register_config_file = base_dir.parents[1] / "data" / "register.json"
 try:
     saved_config = read_json_object(register_config_file, name="register.json")
-    config.update({key: saved_config[key] for key in ("mail", "proxy", "total", "threads") if key in saved_config})
+    config.update({key: saved_config[key] for key in ("mail", "proxy", "total", "threads", "register_flow") if key in saved_config})
 except Exception:
     pass
 
 auth_base = "https://auth.openai.com"
 platform_base = "https://platform.openai.com"
+chatgpt_base = "https://chatgpt.com"
 platform_oauth_client_id = "app_2SKx67EdpoN0G6j64rFvigXD"
 platform_oauth_redirect_uri = f"{platform_base}/auth/callback"
 platform_oauth_audience = "https://api.openai.com/v1"
@@ -783,6 +785,7 @@ class PlatformRegistrar:
         self.device_id = str(uuid.uuid4())
         self.code_verifier = ""
         self.platform_auth_code = ""
+        self.platform_continue_url = ""
         self.last_otp_continue_url = ""
         self.passwordless_signup = False
 
@@ -1002,6 +1005,124 @@ class PlatformRegistrar:
         step(index, "Microsoft passwordless token 换取完成")
         return tokens
 
+    def _chatgpt_signup_authorize(self, email: str, index: int) -> None:
+        """Entry via chatgpt.com CSRF/signin — server auto-sends OTP during redirect chain.
+
+        Replaces _platform_authorize for new-account registration.  The flow:
+          chatgpt.com → CSRF token → POST /api/auth/signin/openai?login_hint=email
+          → follow 302 chain → lands on auth.openai.com/email-verification
+          (OTP already sent by the time we arrive)
+        """
+        step(index, "通过 chatgpt.com 入口发起注册授权")
+
+        # Step 1: visit chatgpt.com to establish session cookies
+        nav_h = self._navigate_headers(chatgpt_base + "/")
+        request_with_local_retry(self.session, "get", chatgpt_base, headers=nav_h, allow_redirects=True, verify=False)
+
+        # Step 2: obtain CSRF token
+        csrf_url = f"{chatgpt_base}/api/auth/csrf"
+        csrf_h = _header_fingerprint(common_headers, self.fingerprint)
+        csrf_h["referer"] = f"{chatgpt_base}/"
+        resp, error = request_with_local_retry(self.session, "get", csrf_url, headers=csrf_h, verify=False)
+        if resp is None or resp.status_code != 200:
+            raise RuntimeError(error or f"csrf_http_{getattr(resp, 'status_code', 'unknown')}")
+        csrf_token = str((_response_json(resp) or {}).get("csrfToken") or "").strip()
+        if not csrf_token:
+            raise RuntimeError("CSRF token 获取失败")
+        step(index, "CSRF token 获取完成")
+
+        # Step 3: POST signin/openai with login_hint (triggers OTP on server)
+        from urllib.parse import urlencode
+        params = urlencode({
+            "prompt": "login",
+            "screen_hint": "login_or_signup",
+            "login_hint": email,
+        })
+        signin_url = f"{chatgpt_base}/api/auth/signin/openai?{params}"
+        signin_h = _header_fingerprint(common_headers, self.fingerprint)
+        signin_h["referer"] = f"{chatgpt_base}/"
+        signin_h["content-type"] = "application/x-www-form-urlencoded"
+        signin_resp, error = request_with_local_retry(
+            self.session, "post", signin_url,
+            data={"callbackUrl": f"{chatgpt_base}/", "csrfToken": csrf_token, "json": "true"},
+            headers=signin_h,
+            allow_redirects=False,
+            verify=False,
+        )
+        if signin_resp is None:
+            raise RuntimeError(error or "signin 请求失败")
+
+        loc = ""
+        try:
+            loc = str((_response_json(signin_resp) or {}).get("url") or "").strip()
+        except Exception:
+            pass
+        if not loc:
+            loc = str((getattr(signin_resp, "headers", {}) or {}).get("Location") or "").strip()
+        if not loc:
+            raise RuntimeError(f"signin 未返回重定向 URL: HTTP {getattr(signin_resp, 'status_code', '?')}")
+
+        # Step 4: follow 302 redirect chain until auth.openai.com/email-verification
+        step(index, "跟随重定向链至 email-verification 页面")
+        final_url = loc
+        for _ in range(10):
+            nav_h2 = self._navigate_headers(final_url)
+            nav_h2 = _headers_with_clearance(nav_h2, final_url, self.proxy, self.clearance_user_agent)
+            resp, _ = request_with_local_retry(
+                self.session, "get", final_url, headers=nav_h2,
+                allow_redirects=False, verify=False,
+            )
+            if resp is None:
+                break
+            next_loc = str((getattr(resp, "headers", {}) or {}).get("Location") or "").strip()
+            if not next_loc:
+                final_url = str(getattr(resp, "url", "") or final_url)
+                break
+            final_url = _absolute_auth_url(next_loc) if next_loc.startswith("/") else next_loc
+
+        self.passwordless_signup = "/email-verification" in final_url.lower()
+        # Update device_id from cookie if server set it
+        for k, v in self.session.cookies.items():
+            if k == "oai-did":
+                self.device_id = str(v)
+                break
+        step(index, f"chatgpt.com 入口授权完成, passwordless={self.passwordless_signup}, url={final_url[:120]}")
+
+    def _exchange_via_chatgpt_session(self, continue_url: str, index: int) -> dict:
+        """Follow continue_url then GET chatgpt.com/api/auth/session to retrieve tokens.
+
+        Replaces the PKCE code-exchange path for accounts created via chatgpt.com entry.
+        """
+        step(index, "通过 chatgpt.com session 换取 token")
+
+        if continue_url:
+            step(index, f"跟随 continue_url: {_safe_url_for_log(continue_url)}")
+            nav_h = self._navigate_headers(f"{auth_base}/")
+            nav_h = _headers_with_clearance(nav_h, continue_url, self.proxy, self.clearance_user_agent)
+            request_with_local_retry(
+                self.session, "get", continue_url,
+                headers=nav_h, allow_redirects=True, verify=False,
+            )
+
+        session_url = f"{chatgpt_base}/api/auth/session"
+        h = _header_fingerprint(common_headers, self.fingerprint)
+        h["referer"] = f"{chatgpt_base}/"
+        resp, error = request_with_local_retry(self.session, "get", session_url, headers=h, verify=False)
+        if resp is None or resp.status_code != 200:
+            raise RuntimeError(error or f"session_http_{getattr(resp, 'status_code', 'unknown')}")
+
+        data = _response_json(resp)
+        access_token = str(data.get("accessToken") or "").strip()
+        if not access_token:
+            raise RuntimeError(f"session 未返回 accessToken: {json.dumps(data, ensure_ascii=False)[:200]}")
+
+        step(index, "chatgpt.com session token 换取完成")
+        return {
+            "access_token": access_token,
+            "refresh_token": "",  # session 接口不返回 refresh_token
+            "id_token": "",
+        }
+
     def _start_passwordless_signup(self, index: int) -> None:
         step(index, "开始切换 passwordless signup 并发送验证码")
         url = f"{auth_base}/api/accounts/passwordless/send-otp"
@@ -1172,15 +1293,18 @@ class PlatformRegistrar:
             detail = f", detail={json.dumps(data, ensure_ascii=False)}" if data else ""
             raise RuntimeError(error or f"create_account_http_{getattr(resp, 'status_code', 'unknown')}{detail}")
         data = _response_json(resp)
-        callback_params = (
-            extract_oauth_callback_params_from_url(str(data.get("continue_url") or "").strip())
-            or extract_oauth_callback_params_from_url(str(getattr(resp, "headers", {}).get("Location") or "").strip())
-            or extract_oauth_callback_params_from_url(str(getattr(resp, "url", "") or "").strip())
-        )
+        # Save full continue_url for session-based token exchange
+        raw_continue = str(
+            data.get("continue_url")
+            or getattr(resp, "headers", {}).get("Location")
+            or getattr(resp, "url", "")
+            or ""
+        ).strip()
+        self.platform_continue_url = raw_continue
+        callback_params = extract_oauth_callback_params_from_url(raw_continue)
         self.platform_auth_code = str((callback_params or {}).get("code") or "").strip()
-        if not self.platform_auth_code:
-            continue_hint = str(data.get("continue_url") or getattr(resp, "headers", {}).get("Location") or getattr(resp, "url", "") or "")
-            raise RuntimeError(f"create_account_missing_callback: continue={_safe_url_for_log(continue_hint)}")
+        if not self.platform_auth_code and not raw_continue:
+            raise RuntimeError(f"create_account_missing_callback: no continue_url returned")
         step(index, "创建账号资料完成")
 
     def _exchange_registered_tokens(self, index: int) -> dict:
@@ -1206,18 +1330,34 @@ class PlatformRegistrar:
         step(index, f"邮箱创建完成[{label}]: {email}")
         try:
             first_name, last_name = _random_name()
-            # authorize 可能直接发送 OTP，先记录收信边界，避免慢跳转后漏掉验证码。
             mailbox["_received_after"] = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
-            landed = self._platform_authorize(email, index)
+
+            register_flow = str(config.get("register_flow") or "chatgpt").strip().lower()
             source_type = "web"
-            if landed == "login":
-                tokens = self._passwordless_login(email, mailbox, index)
-                source_type = "microsoft"
+
+            if register_flow == "pkce":
+                # ── 旧流程: 直接 PKCE authorize ──────────────────────────────
+                landed = self._platform_authorize(email, index)
+                if landed == "login":
+                    tokens = self._passwordless_login(email, mailbox, index)
+                    source_type = "microsoft"
+                else:
+                    if not self.passwordless_signup:
+                        mailbox["_received_after"] = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
+                        self._start_passwordless_signup(index)
+                    step(index, "已进入 passwordless signup")
+                    step(index, "开始等待注册验证码")
+                    code = wait_for_code(mailbox, register_proxy=self.proxy)
+                    if not code:
+                        raise RuntimeError("等待注册验证码超时")
+                    step(index, f"收到注册验证码: {code}")
+                    self._validate_otp(code, index)
+                    self._create_account(f"{first_name} {last_name}", _random_birthdate(), index)
+                    tokens = self._exchange_registered_tokens(index)
             else:
-                if not self.passwordless_signup:
-                    mailbox["_received_after"] = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
-                    self._start_passwordless_signup(index)
-                step(index, "已进入 passwordless signup，不创建本地不可用的随机密码")
+                # ── 新流程（默认）: 通过 chatgpt.com CSRF/signin 入口 ──────────
+                # 服务端在重定向链中自动发送验证码，无需额外调用 send-otp
+                self._chatgpt_signup_authorize(email, index)
                 step(index, "开始等待注册验证码")
                 code = wait_for_code(mailbox, register_proxy=self.proxy)
                 if not code:
@@ -1225,7 +1365,7 @@ class PlatformRegistrar:
                 step(index, f"收到注册验证码: {code}")
                 self._validate_otp(code, index)
                 self._create_account(f"{first_name} {last_name}", _random_birthdate(), index)
-                tokens = self._exchange_registered_tokens(index)
+                tokens = self._exchange_via_chatgpt_session(self.platform_continue_url, index)
         except Exception as error:
             mail_provider.mark_mailbox_result(mailbox, success=False, error=error)
             raise

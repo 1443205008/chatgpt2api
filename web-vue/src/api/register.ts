@@ -91,6 +91,7 @@ export type LegacyRegisterConfig = {
   target_quota: number
   target_available: number
   check_interval: number
+  register_flow: 'chatgpt' | 'pkce' | string
   enabled: boolean
   stats?: {
     success?: number

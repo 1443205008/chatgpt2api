@@ -13,6 +13,20 @@
           />
         </label>
 
+        <label class="register-field">
+          <span class="register-label">注册流程</span>
+          <GroupedSelectMenu
+            v-model="config.register_flow"
+            :options="[
+              { label: 'chatgpt.com 入口（推荐）', value: 'chatgpt' },
+              { label: 'PKCE 直连（旧流程）', value: 'pkce' },
+            ]"
+            selected-indicator="check"
+            :disabled="config.enabled"
+            block
+          />
+        </label>
+
         <label v-if="config.mode === 'total'" class="register-field">
           <span class="register-label">注册总数</span>
           <Input
