@@ -65,6 +65,11 @@ def create_router() -> APIRouter:
         require_admin(authorization)
         return {"register": register_service.reset_outlook_pool(body.scope or "all")}
 
+    @router.post("/api/register/outlook-pool/mark-in-use")
+    async def mark_outlook_pool_in_use(authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        return {"register": register_service.mark_pool_available_as_in_use()}
+
     @router.post("/api/register/gptmail/status")
     async def get_gptmail_status(body: GptMailStatusRequest, authorization: str | None = Header(default=None)):
         require_admin(authorization)

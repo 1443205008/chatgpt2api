@@ -233,6 +233,30 @@ def reset_outlook_token_pool_state(scope: str = "all") -> int:
         return count
 
 
+def mark_addresses_as_in_use(addresses: list[str], only_available: bool = True) -> int:
+    """将指定邮箱地址标记为 in_use。
+
+    only_available=True（默认）：仅标记无任何状态记录的地址（真正可用的）。
+    only_available=False：对所有传入地址强制设置为 in_use（覆盖任何已有状态）。
+    返回实际被标记的数量。
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    marked = 0
+    with _outlook_token_state_lock:
+        store = _load_outlook_token_state()
+        for addr in addresses:
+            key = str(addr or "").strip().lower()
+            if not key:
+                continue
+            if only_available and key in store:
+                continue  # skip addresses that already have a state entry
+            store[key] = {"state": "in_use", "reason": "manual_mark", "updated_at": now}
+            marked += 1
+        if marked:
+            _save_outlook_token_state(store)
+    return marked
+
+
 def prune_outlook_unused_credentials(credentials: list[dict[str, str]], entry: dict | None = None) -> tuple[list[dict[str, str]], int]:
     """Return credentials with recorded state, plus the number pruned as unused."""
     with _outlook_token_state_lock:

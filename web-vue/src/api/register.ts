@@ -152,6 +152,9 @@ export const registerApi = {
   resetOutlookPool(scope: 'all' | 'retryable' | 'invalid' | 'unused' | 'failed' = 'all') {
     return apiClient.post<any, { register: LegacyRegisterConfig }>('/api/register/outlook-pool/reset', { scope })
   },
+  markOutlookPoolInUse() {
+    return apiClient.post<any, { register: LegacyRegisterConfig }>('/api/register/outlook-pool/mark-in-use')
+  },
   getGptMailStatus(provider: RegisterProvider, force = true) {
     return apiClient.post<any, { status: GptMailStatus }>('/api/register/gptmail/status', { provider, force })
   },

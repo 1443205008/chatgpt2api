@@ -21,6 +21,7 @@ export const outlookPoolActionItems = [
   { key: 'retry_failed', label: '重试临时失败' },
   { key: 'retryable', label: '释放占用/失败' },
   { key: 'invalid', label: '清除异常标记', dividerBefore: true },
+  { key: 'mark_in_use', label: '将可用邮箱标为已占用', dividerBefore: true },
   { key: 'unused', label: '清空已用邮箱', danger: true, dividerBefore: true },
   { key: 'all', label: '重置全部邮箱池', danger: true },
 ]
@@ -64,8 +65,7 @@ export function useRegisterOutlookPoolRuntime(input: RegisterOutlookPoolRuntimeI
     }
   }
 
-  async function retryFailedPool() {
-    const ok = await input.confirm({
+  async function retryFailedPool() {    const ok = await input.confirm({
       title: '重试临时失败邮箱',
       message: '将释放 in_use 和 failed 邮箱，并立即启动注册任务继续重试。',
       confirmText: '重试',
@@ -85,9 +85,32 @@ export function useRegisterOutlookPoolRuntime(input: RegisterOutlookPoolRuntimeI
     }
   }
 
+  async function markInUse() {
+    const ok = await input.confirm({
+      title: '将可用邮箱标为已占用',
+      message: '将把邮箱池中所有尚无状态记录的可用邮箱标记为 in_use，后续注册任务将跳过这些邮箱。',
+      confirmText: '标记',
+    })
+    if (!ok) return
+    input.saving.value = true
+    try {
+      const response = await registerApi.markOutlookPoolInUse()
+      input.applyConfig(response.register)
+      input.notifySuccess('可用邮箱已标记为已占用')
+    } catch (error: any) {
+      input.notifyError(error?.message || '标记失败')
+    } finally {
+      input.saving.value = false
+    }
+  }
+
   function handleAction(key: string) {
     if (key === 'retry_failed') {
       void retryFailedPool()
+      return
+    }
+    if (key === 'mark_in_use') {
+      void markInUse()
       return
     }
     if (key === 'retryable' || key === 'invalid' || key === 'unused' || key === 'all') {
@@ -99,6 +122,7 @@ export function useRegisterOutlookPoolRuntime(input: RegisterOutlookPoolRuntimeI
     outlookPoolActionItems,
     resetPool,
     retryFailedPool,
+    markInUse,
     handleAction,
   }
 }

@@ -312,6 +312,31 @@ class RegisterService:
             )
         return self.get()
 
+    def mark_pool_available_as_in_use(self) -> dict:
+        """将所有已配置 outlook_token provider 中尚无状态记录的邮箱标记为 in_use。"""
+        with self._lock:
+            mail = self._config.get("mail") if isinstance(self._config.get("mail"), dict) else {}
+            providers = mail.get("providers") if isinstance(mail.get("providers"), list) else []
+            all_addresses: list[str] = []
+            for provider in providers:
+                if not isinstance(provider, dict) or provider.get("type") != "outlook_token":
+                    continue
+                pool_text = str(provider.get("mailboxes") or "")
+                base_creds = mail_provider.parse_outlook_credentials(pool_text)
+                expanded = mail_provider.expand_outlook_aliases(base_creds, provider)
+                for cred in expanded:
+                    addr = str(cred.get("email") or "").strip().lower()
+                    if addr:
+                        all_addresses.append(addr)
+
+        if not all_addresses:
+            return self.get()
+
+        marked = mail_provider.mark_addresses_as_in_use(all_addresses, only_available=True)
+        with self._lock:
+            self._append_log(f"已将 {marked} 个可用邮箱标记为已占用", "yellow")
+        return self.get()
+
     def _mail_config_with_proxy(self) -> dict:
         mail = json.loads(json.dumps(self._config.get("mail") if isinstance(self._config.get("mail"), dict) else {}, ensure_ascii=False))
         use_register_proxy = _safe_bool(mail.get("api_use_register_proxy"), True)
