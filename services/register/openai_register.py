@@ -52,6 +52,22 @@ platform_oauth_audience = "https://api.openai.com/v1"
 platform_auth0_client = "eyJuYW1lIjoiYXV0aDAtc3BhLWpzIiwidmVyc2lvbiI6IjEuMjEuMCJ9"
 REGISTER_BROWSER_PROFILES: tuple[dict[str, str], ...] = (
     {
+        "impersonate": "firefox144",
+        "major": "144",
+        "full_version": "144.0",
+        "platform_version": "10.0.0",
+        "accept_language": "en-US,en;q=0.5",
+        "browser": "firefox",
+    },
+    {
+        "impersonate": "firefox144",
+        "major": "144",
+        "full_version": "144.0",
+        "platform_version": "10.0.0",
+        "accept_language": "en-US,en;q=0.5",
+        "browser": "firefox",
+    },
+    {
         "impersonate": "chrome142",
         "major": "142",
         "full_version": "142.0.0.0",
@@ -65,14 +81,11 @@ REGISTER_BROWSER_PROFILES: tuple[dict[str, str], ...] = (
         "platform_version": "10.0.0",
         "accept_language": "en-US,en;q=0.9",
     },
-    {
-        "impersonate": "chrome131",
-        "major": "131",
-        "full_version": "131.0.0.0",
-        "platform_version": "10.0.0",
-        "accept_language": "en-US,en;q=0.9",
-    },
 )
+
+
+def _firefox_user_agent(major: str) -> str:
+    return f"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:{major}.0) Gecko/20100101 Firefox/{major}.0"
 
 
 def _chrome_user_agent(major: str, full_version: str) -> str:
@@ -98,6 +111,21 @@ def _chrome_sec_ch_ua_full_version_list(major: str, full_version: str) -> str:
 def _complete_browser_fingerprint(profile: dict[str, str]) -> dict[str, str]:
     major = str(profile.get("major") or "142").strip()
     full_version = str(profile.get("full_version") or f"{major}.0.0.0").strip()
+    is_firefox = str(profile.get("browser") or "").lower() == "firefox"
+    if is_firefox:
+        ua = str(profile.get("user_agent") or _firefox_user_agent(major))
+        return {
+            **profile,
+            "major": major,
+            "full_version": full_version,
+            "user_agent": ua,
+            "sec_ch_ua": "",                        # Firefox doesn't send sec-ch-ua
+            "sec_ch_ua_full_version_list": "",
+            "accept_language": str(profile.get("accept_language") or "en-US,en;q=0.5"),
+            "platform_version": str(profile.get("platform_version") or "10.0.0"),
+            "impersonate": str(profile.get("impersonate") or "firefox144"),
+            "browser": "firefox",
+        }
     return {
         **profile,
         "major": major,
@@ -110,6 +138,7 @@ def _complete_browser_fingerprint(profile: dict[str, str]) -> dict[str, str]:
         "accept_language": str(profile.get("accept_language") or "en-US,en;q=0.9"),
         "platform_version": str(profile.get("platform_version") or "10.0.0"),
         "impersonate": str(profile.get("impersonate") or "chrome"),
+        "browser": "chrome",
     }
 
 
@@ -181,11 +210,19 @@ def _header_fingerprint(headers: dict[str, str], fingerprint: dict[str, str] | N
     fp = _browser_fingerprint(fingerprint)
     next_headers = dict(headers)
     next_headers["user-agent"] = fp["user_agent"]
-    next_headers["sec-ch-ua"] = fp["sec_ch_ua"]
-    if "sec-ch-ua-full-version-list" in next_headers:
-        next_headers["sec-ch-ua-full-version-list"] = fp["sec_ch_ua_full_version_list"]
-    if "sec-ch-ua-platform-version" in next_headers:
-        next_headers["sec-ch-ua-platform-version"] = f'"{fp["platform_version"]}"'
+    is_firefox = str(fp.get("browser") or "").lower() == "firefox"
+    if is_firefox:
+        # Firefox doesn't send sec-ch-ua headers — strip any that came from the template
+        for key in ("sec-ch-ua", "sec-ch-ua-full-version-list", "sec-ch-ua-platform-version",
+                    "sec-ch-ua-mobile", "sec-ch-ua-model", "sec-ch-ua-arch",
+                    "sec-ch-ua-bitness", "sec-ch-ua-platform"):
+            next_headers.pop(key, None)
+    else:
+        next_headers["sec-ch-ua"] = fp["sec_ch_ua"]
+        if "sec-ch-ua-full-version-list" in next_headers:
+            next_headers["sec-ch-ua-full-version-list"] = fp["sec_ch_ua_full_version_list"]
+        if "sec-ch-ua-platform-version" in next_headers:
+            next_headers["sec-ch-ua-platform-version"] = f'"{fp["platform_version"]}"'
     if "accept-language" in next_headers:
         next_headers["accept-language"] = fp["accept_language"]
     return next_headers
