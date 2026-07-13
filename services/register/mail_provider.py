@@ -234,11 +234,14 @@ def reset_outlook_token_pool_state(scope: str = "all") -> int:
 
 
 def mark_addresses_as_in_use(addresses: list[str], only_available: bool = True) -> int:
-    """将指定邮箱地址标记为 in_use。
+    """将指定邮箱地址标记为 used（永久占用，注册任务不会再取）。
 
     only_available=True（默认）：仅标记无任何状态记录的地址（真正可用的）。
-    only_available=False：对所有传入地址强制设置为 in_use（覆盖任何已有状态）。
+    only_available=False：对所有传入地址强制设置为 used（覆盖任何已有状态）。
     返回实际被标记的数量。
+
+    注意：使用 used 而非 in_use，因为 in_use 是1小时超时的软锁，
+    used 才是真正的终态，注册任务不会再取。
     """
     now = datetime.now(timezone.utc).isoformat()
     marked = 0
@@ -250,7 +253,7 @@ def mark_addresses_as_in_use(addresses: list[str], only_available: bool = True) 
                 continue
             if only_available and key in store:
                 continue  # skip addresses that already have a state entry
-            store[key] = {"state": "in_use", "reason": "manual_mark", "updated_at": now}
+            store[key] = {"state": "used", "reason": "manual_mark", "updated_at": now}
             marked += 1
         if marked:
             _save_outlook_token_state(store)
