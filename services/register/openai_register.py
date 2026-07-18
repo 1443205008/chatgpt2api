@@ -1153,19 +1153,22 @@ class PlatformRegistrar:
                     break
                 final_url = _absolute_auth_url(next_loc) if next_loc.startswith("/") else next_loc
 
-            # Copy auth.openai.com cookies into self.session to continue the flow
+            # Copy ALL cookies (chatgpt.com + openai.com) into self.session.
+            # chatgpt.com cookies are needed for /api/auth/session token exchange;
+            # auth.openai.com cookies are needed for OTP validation and account creation.
             for cookie in tmp_session.cookies.jar:
                 domain = str(getattr(cookie, "domain", "") or "")
-                if "auth.openai.com" in domain or "openai.com" in domain:
-                    try:
-                        self.session.cookies.set(
-                            str(getattr(cookie, "name", "") or ""),
-                            str(getattr(cookie, "value", "") or ""),
-                            domain=domain,
-                            path=str(getattr(cookie, "path", "/") or "/"),
-                        )
-                    except Exception:
-                        pass
+                if not domain:
+                    continue
+                try:
+                    self.session.cookies.set(
+                        str(getattr(cookie, "name", "") or ""),
+                        str(getattr(cookie, "value", "") or ""),
+                        domain=domain,
+                        path=str(getattr(cookie, "path", "/") or "/"),
+                    )
+                except Exception:
+                    pass
         finally:
             tmp_session.close()
 
