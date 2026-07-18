@@ -36,11 +36,11 @@ if TYPE_CHECKING:
 
 # ── 常量 ──────────────────────────────────────────────────────
 DEFAULT_SENTINEL_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/142.0.0.0 Safari/537.36"
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/605.1.15 (KHTML, like Gecko) "
+    "Version/18.0 Safari/605.1.15"
 )
-DEFAULT_SENTINEL_SEC_CH_UA = '"Chromium";v="142", "Google Chrome";v="142", "Not/A)Brand";v="99"'
+DEFAULT_SENTINEL_SEC_CH_UA = ""  # Safari doesn't send sec-ch-ua
 
 DOCUMENT_KEYS = [
     "location", "referrer", "cookie", "title", "URL", "domain", "body", "head",

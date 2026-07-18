@@ -52,36 +52,46 @@ platform_oauth_audience = "https://api.openai.com/v1"
 platform_auth0_client = "eyJuYW1lIjoiYXV0aDAtc3BhLWpzIiwidmVyc2lvbiI6IjEuMjEuMCJ9"
 REGISTER_BROWSER_PROFILES: tuple[dict[str, str], ...] = (
     {
-        "impersonate": "firefox144",
-        "major": "144",
-        "full_version": "144.0",
-        "platform_version": "10.0.0",
-        "accept_language": "en-US,en;q=0.5",
-        "browser": "firefox",
-    },
-    {
-        "impersonate": "firefox144",
-        "major": "144",
-        "full_version": "144.0",
-        "platform_version": "10.0.0",
-        "accept_language": "en-US,en;q=0.5",
-        "browser": "firefox",
-    },
-    {
-        "impersonate": "chrome142",
-        "major": "142",
-        "full_version": "142.0.0.0",
-        "platform_version": "10.0.0",
+        "impersonate": "safari18_0",
+        "safari_ver": "18.0",
+        "webkit_ver": "605.1.15",
+        "screen": "1440x900",
         "accept_language": "en-US,en;q=0.9",
+        "browser": "safari",
     },
     {
-        "impersonate": "chrome136",
-        "major": "136",
-        "full_version": "136.0.0.0",
-        "platform_version": "10.0.0",
-        "accept_language": "en-US,en;q=0.9",
+        "impersonate": "safari17_0",
+        "safari_ver": "17.0",
+        "webkit_ver": "605.1.15",
+        "screen": "1512x982",
+        "accept_language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
+        "browser": "safari",
+    },
+    {
+        "impersonate": "safari15_5",
+        "safari_ver": "15.5",
+        "webkit_ver": "605.1.15",
+        "screen": "1728x1117",
+        "accept_language": "en-GB,en;q=0.9,en-US;q=0.8",
+        "browser": "safari",
+    },
+    {
+        "impersonate": "safari15_3",
+        "safari_ver": "15.3",
+        "webkit_ver": "605.1.15",
+        "screen": "1920x1080",
+        "accept_language": "en-US,en;q=0.9,ja;q=0.8",
+        "browser": "safari",
     },
 )
+
+
+def _safari_user_agent(safari_ver: str, webkit_ver: str) -> str:
+    return (
+        f"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        f"AppleWebKit/{webkit_ver} (KHTML, like Gecko) "
+        f"Version/{safari_ver} Safari/{webkit_ver}"
+    )
 
 
 def _firefox_user_agent(major: str) -> str:
@@ -109,23 +119,44 @@ def _chrome_sec_ch_ua_full_version_list(major: str, full_version: str) -> str:
 
 
 def _complete_browser_fingerprint(profile: dict[str, str]) -> dict[str, str]:
+    browser = str(profile.get("browser") or "").lower()
     major = str(profile.get("major") or "142").strip()
     full_version = str(profile.get("full_version") or f"{major}.0.0.0").strip()
-    is_firefox = str(profile.get("browser") or "").lower() == "firefox"
-    if is_firefox:
+
+    if browser == "safari":
+        safari_ver = str(profile.get("safari_ver") or "18.0")
+        webkit_ver = str(profile.get("webkit_ver") or "605.1.15")
+        ua = str(profile.get("user_agent") or _safari_user_agent(safari_ver, webkit_ver))
+        return {
+            **profile,
+            "major": safari_ver.split(".")[0],
+            "full_version": safari_ver,
+            "user_agent": ua,
+            "sec_ch_ua": "",           # Safari doesn't send Client Hints
+            "sec_ch_ua_full_version_list": "",
+            "accept_language": str(profile.get("accept_language") or "en-US,en;q=0.9"),
+            "platform_version": "",    # macOS, not tracked in sec-ch-ua-platform-version
+            "impersonate": str(profile.get("impersonate") or "safari18_0"),
+            "browser": "safari",
+            "screen": str(profile.get("screen") or "1440x900"),
+        }
+
+    if browser == "firefox":
         ua = str(profile.get("user_agent") or _firefox_user_agent(major))
         return {
             **profile,
             "major": major,
             "full_version": full_version,
             "user_agent": ua,
-            "sec_ch_ua": "",                        # Firefox doesn't send sec-ch-ua
+            "sec_ch_ua": "",
             "sec_ch_ua_full_version_list": "",
             "accept_language": str(profile.get("accept_language") or "en-US,en;q=0.5"),
             "platform_version": str(profile.get("platform_version") or "10.0.0"),
             "impersonate": str(profile.get("impersonate") or "firefox144"),
             "browser": "firefox",
         }
+
+    # Chrome (default)
     return {
         **profile,
         "major": major,
