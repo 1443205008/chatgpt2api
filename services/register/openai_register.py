@@ -1083,77 +1083,102 @@ class PlatformRegistrar:
         """
         step(index, "通过 chatgpt.com 入口发起注册授权")
 
-        # Step 1: visit chatgpt.com to establish session cookies
-        nav_h = self._navigate_headers(chatgpt_base + "/")
-        request_with_local_retry(self.session, "get", chatgpt_base, headers=nav_h, allow_redirects=True, verify=False)
-
-        # Step 2: obtain CSRF token
-        csrf_url = f"{chatgpt_base}/api/auth/csrf"
-        csrf_h = _header_fingerprint(common_headers, self.fingerprint)
-        csrf_h["referer"] = f"{chatgpt_base}/"
-        resp, error = request_with_local_retry(self.session, "get", csrf_url, headers=csrf_h, verify=False)
-        if resp is None or resp.status_code != 200:
-            raise RuntimeError(error or f"csrf_http_{getattr(resp, 'status_code', 'unknown')}")
-        csrf_token = str((_response_json(resp) or {}).get("csrfToken") or "").strip()
-        if not csrf_token:
-            raise RuntimeError("CSRF token 获取失败")
-        step(index, "CSRF token 获取完成")
-
-        # Step 3: POST signin/openai with login_hint (triggers OTP on server)
-        from urllib.parse import urlencode
-        params = urlencode({
-            "prompt": "login",
-            "screen_hint": "login_or_signup",
-            "login_hint": email,
-        })
-        signin_url = f"{chatgpt_base}/api/auth/signin/openai?{params}"
-        signin_h = _header_fingerprint(common_headers, self.fingerprint)
-        signin_h["referer"] = f"{chatgpt_base}/"
-        signin_h["content-type"] = "application/x-www-form-urlencoded"
-        signin_resp, error = request_with_local_retry(
-            self.session, "post", signin_url,
-            data={"callbackUrl": f"{chatgpt_base}/", "csrfToken": csrf_token, "json": "true"},
-            headers=signin_h,
-            allow_redirects=False,
-            verify=False,
-        )
-        if signin_resp is None:
-            raise RuntimeError(error or "signin 请求失败")
-
-        loc = ""
+        # Use a dedicated temporary session for the chatgpt.com entry flow.
+        # This prevents __cflb and other Cloudflare cookies from colliding across
+        # chatgpt.com and auth.openai.com in the shared self.session cookie jar.
+        tmp_session = create_session(self.proxy, self.fingerprint)
         try:
-            loc = str((_response_json(signin_resp) or {}).get("url") or "").strip()
-        except Exception:
-            pass
-        if not loc:
-            loc = str((getattr(signin_resp, "headers", {}) or {}).get("Location") or "").strip()
-        if not loc:
-            raise RuntimeError(f"signin 未返回重定向 URL: HTTP {getattr(signin_resp, 'status_code', '?')}")
+            # Step 1: visit chatgpt.com to establish session cookies
+            nav_h = self._navigate_headers(chatgpt_base + "/")
+            request_with_local_retry(tmp_session, "get", chatgpt_base, headers=nav_h, allow_redirects=True, verify=False)
 
-        # Step 4: follow 302 redirect chain until auth.openai.com/email-verification
-        step(index, "跟随重定向链至 email-verification 页面")
-        final_url = loc
-        for _ in range(10):
-            nav_h2 = self._navigate_headers(final_url)
-            nav_h2 = _headers_with_clearance(nav_h2, final_url, self.proxy, self.clearance_user_agent)
-            resp, _ = request_with_local_retry(
-                self.session, "get", final_url, headers=nav_h2,
-                allow_redirects=False, verify=False,
+            # Step 2: obtain CSRF token
+            csrf_url = f"{chatgpt_base}/api/auth/csrf"
+            csrf_h = _header_fingerprint(common_headers, self.fingerprint)
+            csrf_h["referer"] = f"{chatgpt_base}/"
+            resp, error = request_with_local_retry(tmp_session, "get", csrf_url, headers=csrf_h, verify=False)
+            if resp is None or resp.status_code != 200:
+                raise RuntimeError(error or f"csrf_http_{getattr(resp, 'status_code', 'unknown')}")
+            csrf_token = str((_response_json(resp) or {}).get("csrfToken") or "").strip()
+            if not csrf_token:
+                raise RuntimeError("CSRF token 获取失败")
+            step(index, "CSRF token 获取完成")
+
+            # Step 3: POST signin/openai with login_hint (triggers OTP on server)
+            from urllib.parse import urlencode
+            params = urlencode({
+                "prompt": "login",
+                "screen_hint": "login_or_signup",
+                "login_hint": email,
+            })
+            signin_url = f"{chatgpt_base}/api/auth/signin/openai?{params}"
+            signin_h = _header_fingerprint(common_headers, self.fingerprint)
+            signin_h["referer"] = f"{chatgpt_base}/"
+            signin_h["content-type"] = "application/x-www-form-urlencoded"
+            signin_resp, error = request_with_local_retry(
+                tmp_session, "post", signin_url,
+                data={"callbackUrl": f"{chatgpt_base}/", "csrfToken": csrf_token, "json": "true"},
+                headers=signin_h,
+                allow_redirects=False,
+                verify=False,
             )
-            if resp is None:
-                break
-            next_loc = str((getattr(resp, "headers", {}) or {}).get("Location") or "").strip()
-            if not next_loc:
-                final_url = str(getattr(resp, "url", "") or final_url)
-                break
-            final_url = _absolute_auth_url(next_loc) if next_loc.startswith("/") else next_loc
+            if signin_resp is None:
+                raise RuntimeError(error or "signin 请求失败")
+
+            loc = ""
+            try:
+                loc = str((_response_json(signin_resp) or {}).get("url") or "").strip()
+            except Exception:
+                pass
+            if not loc:
+                loc = str((getattr(signin_resp, "headers", {}) or {}).get("Location") or "").strip()
+            if not loc:
+                raise RuntimeError(f"signin 未返回重定向 URL: HTTP {getattr(signin_resp, 'status_code', '?')}")
+
+            # Step 4: follow 302 redirect chain until auth.openai.com/email-verification
+            step(index, "跟随重定向链至 email-verification 页面")
+            final_url = loc
+            for _ in range(10):
+                nav_h2 = self._navigate_headers(final_url)
+                nav_h2 = _headers_with_clearance(nav_h2, final_url, self.proxy, self.clearance_user_agent)
+                resp, _ = request_with_local_retry(
+                    tmp_session, "get", final_url, headers=nav_h2,
+                    allow_redirects=False, verify=False,
+                )
+                if resp is None:
+                    break
+                next_loc = str((getattr(resp, "headers", {}) or {}).get("Location") or "").strip()
+                if not next_loc:
+                    final_url = str(getattr(resp, "url", "") or final_url)
+                    break
+                final_url = _absolute_auth_url(next_loc) if next_loc.startswith("/") else next_loc
+
+            # Copy auth.openai.com cookies into self.session to continue the flow
+            for cookie in tmp_session.cookies.jar:
+                domain = str(getattr(cookie, "domain", "") or "")
+                if "auth.openai.com" in domain or "openai.com" in domain:
+                    try:
+                        self.session.cookies.set(
+                            str(getattr(cookie, "name", "") or ""),
+                            str(getattr(cookie, "value", "") or ""),
+                            domain=domain,
+                            path=str(getattr(cookie, "path", "/") or "/"),
+                        )
+                    except Exception:
+                        pass
+        finally:
+            tmp_session.close()
 
         self.passwordless_signup = "/email-verification" in final_url.lower()
-        # Update device_id from cookie if server set it
-        for k, v in self.session.cookies.items():
-            if k == "oai-did":
-                self.device_id = str(v)
-                break
+        # Update device_id from oai-did cookie (prefer auth.openai.com domain)
+        try:
+            did = self.session.cookies.get("oai-did", domain=".auth.openai.com") \
+                  or self.session.cookies.get("oai-did", domain="auth.openai.com") \
+                  or self.session.cookies.get("oai-did")
+            if did:
+                self.device_id = str(did)
+        except Exception:
+            pass
         step(index, f"chatgpt.com 入口授权完成, passwordless={self.passwordless_signup}, url={final_url[:120]}")
 
     def _exchange_via_chatgpt_session(self, continue_url: str, index: int) -> dict:
