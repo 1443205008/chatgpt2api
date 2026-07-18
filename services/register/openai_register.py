@@ -1327,7 +1327,7 @@ class PlatformRegistrar:
             )
 
         self.passwordless_signup = True
-        step(index, f"chatgpt.com 入口授权完成, passwordless={self.passwordless_signup}, url={final_url[:120]}")
+        step(index, "chatgpt.com 入口授权完成，验证码邮件已触发")
 
     def _exchange_via_chatgpt_session(self, continue_url: str, index: int) -> dict:
         """Follow continue_url then GET chatgpt.com/api/auth/session to retrieve tokens.
