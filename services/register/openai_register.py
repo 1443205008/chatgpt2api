@@ -51,27 +51,106 @@ platform_oauth_redirect_uri = f"{platform_base}/auth/callback"
 platform_oauth_audience = "https://api.openai.com/v1"
 platform_auth0_client = "eyJuYW1lIjoiYXV0aDAtc3BhLWpzIiwidmVyc2lvbiI6IjEuMjEuMCJ9"
 REGISTER_BROWSER_PROFILES: tuple[dict[str, str], ...] = (
+    # Safari 18.x — macOS Sequoia / Sonoma
+    {
+        "impersonate": "safari18_0",
+        "safari_ver": "18.2",
+        "webkit_ver": "620.1.16",
+        "macos_ver": "15_2",
+        "screen": "1440x900",
+        "accept_language": "en-US,en;q=0.9",
+        "browser": "safari",
+    },
+    {
+        "impersonate": "safari18_0",
+        "safari_ver": "18.1.1",
+        "webkit_ver": "618.2.12",
+        "macos_ver": "14_7_2",
+        "screen": "1512x982",
+        "accept_language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
+        "browser": "safari",
+    },
     {
         "impersonate": "safari18_0",
         "safari_ver": "18.0",
         "webkit_ver": "605.1.15",
-        "screen": "1440x900",
+        "macos_ver": "14_6_1",
+        "screen": "1728x1117",
+        "accept_language": "en-GB,en;q=0.9,en-US;q=0.8",
+        "browser": "safari",
+    },
+    {
+        "impersonate": "safari18_0",
+        "safari_ver": "18.2",
+        "webkit_ver": "620.1.16",
+        "macos_ver": "15_1",
+        "screen": "2560x1600",
+        "accept_language": "en-US,en;q=0.9,ja;q=0.8",
+        "browser": "safari",
+    },
+    # Safari 17.x — macOS Sonoma
+    {
+        "impersonate": "safari17_0",
+        "safari_ver": "17.6",
+        "webkit_ver": "605.1.15",
+        "macos_ver": "14_6_1",
+        "screen": "2880x1800",
         "accept_language": "en-US,en;q=0.9",
+        "browser": "safari",
+    },
+    {
+        "impersonate": "safari17_0",
+        "safari_ver": "17.5",
+        "webkit_ver": "605.1.15",
+        "macos_ver": "14_5",
+        "screen": "1920x1080",
+        "accept_language": "en-US,en;q=0.9,fr-FR;q=0.8,fr;q=0.7",
+        "browser": "safari",
+    },
+    {
+        "impersonate": "safari17_0",
+        "safari_ver": "17.2.1",
+        "webkit_ver": "605.1.15",
+        "macos_ver": "14_2_1",
+        "screen": "3024x1964",
+        "accept_language": "en-US,en;q=0.9,de-DE;q=0.8,de;q=0.7",
         "browser": "safari",
     },
     {
         "impersonate": "safari17_0",
         "safari_ver": "17.0",
         "webkit_ver": "605.1.15",
-        "screen": "1512x982",
-        "accept_language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
+        "macos_ver": "14_0",
+        "screen": "1440x900",
+        "accept_language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+        "browser": "safari",
+    },
+    # Safari 16.x — macOS Ventura
+    {
+        "impersonate": "safari16_0",
+        "safari_ver": "16.6.1",
+        "webkit_ver": "605.1.15",
+        "macos_ver": "13_6_1",
+        "screen": "1680x1050",
+        "accept_language": "en-US,en;q=0.9",
         "browser": "safari",
     },
     {
-        "impersonate": "safari15_5",
-        "safari_ver": "15.5",
+        "impersonate": "safari16_0",
+        "safari_ver": "16.5",
         "webkit_ver": "605.1.15",
-        "screen": "1728x1117",
+        "macos_ver": "13_4",
+        "screen": "1512x982",
+        "accept_language": "en-US,en;q=0.9,es-ES;q=0.8,es;q=0.7",
+        "browser": "safari",
+    },
+    # Safari 15.x — macOS Monterey
+    {
+        "impersonate": "safari15_5",
+        "safari_ver": "15.6.1",
+        "webkit_ver": "605.1.15",
+        "macos_ver": "12_6_1",
+        "screen": "1280x800",
         "accept_language": "en-GB,en;q=0.9,en-US;q=0.8",
         "browser": "safari",
     },
@@ -79,16 +158,17 @@ REGISTER_BROWSER_PROFILES: tuple[dict[str, str], ...] = (
         "impersonate": "safari15_3",
         "safari_ver": "15.3",
         "webkit_ver": "605.1.15",
-        "screen": "1920x1080",
-        "accept_language": "en-US,en;q=0.9,ja;q=0.8",
+        "macos_ver": "12_2_1",
+        "screen": "2560x1440",
+        "accept_language": "en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7",
         "browser": "safari",
     },
 )
 
 
-def _safari_user_agent(safari_ver: str, webkit_ver: str) -> str:
+def _safari_user_agent(safari_ver: str, webkit_ver: str, macos_ver: str = "10_15_7") -> str:
     return (
-        f"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        f"Mozilla/5.0 (Macintosh; Intel Mac OS X {macos_ver}) "
         f"AppleWebKit/{webkit_ver} (KHTML, like Gecko) "
         f"Version/{safari_ver} Safari/{webkit_ver}"
     )
@@ -126,7 +206,9 @@ def _complete_browser_fingerprint(profile: dict[str, str]) -> dict[str, str]:
     if browser == "safari":
         safari_ver = str(profile.get("safari_ver") or "18.0")
         webkit_ver = str(profile.get("webkit_ver") or "605.1.15")
-        ua = str(profile.get("user_agent") or _safari_user_agent(safari_ver, webkit_ver))
+        ua = str(profile.get("user_agent") or _safari_user_agent(
+            safari_ver, webkit_ver, macos_ver=str(profile.get("macos_ver") or "10_15_7")
+        ))
         return {
             **profile,
             "major": safari_ver.split(".")[0],
@@ -1074,29 +1156,29 @@ class PlatformRegistrar:
         return tokens
 
     def _chatgpt_signup_authorize(self, email: str, index: int) -> None:
-        """Entry via chatgpt.com CSRF/signin — server auto-sends OTP during redirect chain.
+        """Entry via chatgpt.com CSRF/signin — full step-by-step auth flow.
 
-        Replaces _platform_authorize for new-account registration.  The flow:
-          chatgpt.com → CSRF token → POST /api/auth/signin/openai?login_hint=email
-          → follow 302 chain → lands on auth.openai.com/email-verification
-          (OTP already sent by the time we arrive)
+        Mirrors the reference project (gpt-outlook-register) flow:
+          1. chatgpt.com → CSRF token
+          2. POST /api/auth/signin/openai (no login_hint) → auth_url
+          3. GET auth_url → follow to auth.openai.com → device_id
+          4. POST /authorize/continue (screen_hint=signup) → new or existing account
+          5. New: register_password → send_otp (GET /email-otp/send)
+          6. Caller waits for OTP, validates, creates account, exchanges tokens
         """
         step(index, "通过 chatgpt.com 入口发起注册授权")
 
-        # Use a dedicated temporary session for the chatgpt.com entry flow.
-        # This prevents __cflb and other Cloudflare cookies from colliding across
-        # chatgpt.com and auth.openai.com in the shared self.session cookie jar.
+        # Use a dedicated temporary session for chatgpt.com to avoid __cflb cookie
+        # conflicts across chatgpt.com and auth.openai.com.
         tmp_session = create_session(self.proxy, self.fingerprint)
         try:
-            # Step 1: visit chatgpt.com to establish session cookies
+            # ── Step 1: chatgpt.com → CSRF token ──────────────────────────────
             nav_h = self._navigate_headers(chatgpt_base + "/")
             request_with_local_retry(tmp_session, "get", chatgpt_base, headers=nav_h, allow_redirects=True, verify=False)
 
-            # Step 2: obtain CSRF token
-            csrf_url = f"{chatgpt_base}/api/auth/csrf"
             csrf_h = _header_fingerprint(common_headers, self.fingerprint)
-            csrf_h["referer"] = f"{chatgpt_base}/"
-            resp, error = request_with_local_retry(tmp_session, "get", csrf_url, headers=csrf_h, verify=False)
+            csrf_h["referer"] = f"{chatgpt_base}/auth/login"
+            resp, error = request_with_local_retry(tmp_session, "get", f"{chatgpt_base}/api/auth/csrf", headers=csrf_h, verify=False)
             if resp is None or resp.status_code != 200:
                 raise RuntimeError(error or f"csrf_http_{getattr(resp, 'status_code', 'unknown')}")
             csrf_token = str((_response_json(resp) or {}).get("csrfToken") or "").strip()
@@ -1104,19 +1186,13 @@ class PlatformRegistrar:
                 raise RuntimeError("CSRF token 获取失败")
             step(index, "CSRF token 获取完成")
 
-            # Step 3: POST signin/openai with login_hint (triggers OTP on server)
-            from urllib.parse import urlencode
-            params = urlencode({
-                "prompt": "login",
-                "screen_hint": "login_or_signup",
-                "login_hint": email,
-            })
-            signin_url = f"{chatgpt_base}/api/auth/signin/openai?{params}"
+            # ── Step 2: POST signin/openai → auth_url ─────────────────────────
+            # No login_hint here — let the auth state machine handle new vs existing
             signin_h = _header_fingerprint(common_headers, self.fingerprint)
-            signin_h["referer"] = f"{chatgpt_base}/"
+            signin_h["referer"] = f"{chatgpt_base}/auth/login"
             signin_h["content-type"] = "application/x-www-form-urlencoded"
             signin_resp, error = request_with_local_retry(
-                tmp_session, "post", signin_url,
+                tmp_session, "post", f"{chatgpt_base}/api/auth/signin/openai",
                 data={"callbackUrl": f"{chatgpt_base}/", "csrfToken": csrf_token, "json": "true"},
                 headers=signin_h,
                 allow_redirects=False,
@@ -1124,38 +1200,18 @@ class PlatformRegistrar:
             )
             if signin_resp is None:
                 raise RuntimeError(error or "signin 请求失败")
+            auth_url = str((_response_json(signin_resp) or {}).get("url") or "").strip()
+            if not auth_url:
+                auth_url = str((getattr(signin_resp, "headers", {}) or {}).get("Location") or "").strip()
+            if not auth_url:
+                raise RuntimeError(f"signin 未返回 auth_url: HTTP {getattr(signin_resp, 'status_code', '?')}")
 
-            loc = ""
-            try:
-                loc = str((_response_json(signin_resp) or {}).get("url") or "").strip()
-            except Exception:
-                pass
-            if not loc:
-                loc = str((getattr(signin_resp, "headers", {}) or {}).get("Location") or "").strip()
-            if not loc:
-                raise RuntimeError(f"signin 未返回重定向 URL: HTTP {getattr(signin_resp, 'status_code', '?')}")
+            # ── Step 3: GET auth_url → land on auth.openai.com → device_id ───
+            step(index, "OAuth 初始化，获取 device_id")
+            auth_nav_h = self._navigate_headers(f"{chatgpt_base}/auth/login")
+            resp, _ = request_with_local_retry(tmp_session, "get", auth_url, headers=auth_nav_h, allow_redirects=True, verify=False)
 
-            # Step 4: follow 302 redirect chain until auth.openai.com/email-verification
-            step(index, "跟随重定向链至 email-verification 页面")
-            final_url = loc
-            for _ in range(10):
-                nav_h2 = self._navigate_headers(final_url)
-                nav_h2 = _headers_with_clearance(nav_h2, final_url, self.proxy, self.clearance_user_agent)
-                resp, _ = request_with_local_retry(
-                    tmp_session, "get", final_url, headers=nav_h2,
-                    allow_redirects=False, verify=False,
-                )
-                if resp is None:
-                    break
-                next_loc = str((getattr(resp, "headers", {}) or {}).get("Location") or "").strip()
-                if not next_loc:
-                    final_url = str(getattr(resp, "url", "") or final_url)
-                    break
-                final_url = _absolute_auth_url(next_loc) if next_loc.startswith("/") else next_loc
-
-            # Copy ALL cookies (chatgpt.com + openai.com) into self.session.
-            # chatgpt.com cookies are needed for /api/auth/session token exchange;
-            # auth.openai.com cookies are needed for OTP validation and account creation.
+            # Copy ALL cookies (chatgpt.com + openai.com) into self.session
             for cookie in tmp_session.cookies.jar:
                 domain = str(getattr(cookie, "domain", "") or "")
                 if not domain:
@@ -1172,16 +1228,109 @@ class PlatformRegistrar:
         finally:
             tmp_session.close()
 
-        self.passwordless_signup = "/email-verification" in final_url.lower()
-        # Update device_id from oai-did cookie (prefer auth.openai.com domain)
+        # Extract device_id from oai-did cookie
         try:
-            did = self.session.cookies.get("oai-did", domain=".auth.openai.com") \
-                  or self.session.cookies.get("oai-did", domain="auth.openai.com") \
-                  or self.session.cookies.get("oai-did")
+            did = (self.session.cookies.get("oai-did", domain=".auth.openai.com")
+                   or self.session.cookies.get("oai-did", domain="auth.openai.com")
+                   or self.session.cookies.get("oai-did"))
             if did:
                 self.device_id = str(did)
         except Exception:
             pass
+        # Also check the response HTML as fallback
+        if resp is not None:
+            try:
+                m = re.search(r'oai-did["\s:=]+([a-f0-9-]{36})', resp.text or "")
+                if m and not self.device_id:
+                    self.device_id = m.group(1)
+            except Exception:
+                pass
+        step(index, f"device_id={self.device_id[:12]}...")
+
+        # ── Step 4: authorize/continue with screen_hint=signup ────────────────
+        step(index, "提交注册邮箱 (authorize/continue signup)")
+        sentinel_value, _oai_sc = build_sentinel_token(
+            self.session, self.device_id, "authorize_continue",
+            user_agent=self.fingerprint.get("user_agent", ""),
+            sec_ch_ua=self.fingerprint.get("sec_ch_ua", ""),
+        )
+        continue_h = self._json_headers(f"{auth_base}/create-account")
+        continue_h["openai-sentinel-token"] = sentinel_value
+        continue_h = _headers_with_clearance(continue_h, f"{auth_base}/api/accounts/authorize/continue", self.proxy, self.clearance_user_agent)
+        ac_resp, error = request_with_local_retry(
+            self.session, "post", f"{auth_base}/api/accounts/authorize/continue",
+            json={"username": {"kind": "email", "value": email}, "screen_hint": "signup"},
+            headers=continue_h,
+            allow_redirects=False,
+            verify=False,
+        )
+        ac_data = _response_json(ac_resp) if ac_resp is not None else {}
+        page = (ac_data.get("page") or {}) if isinstance(ac_data, dict) else {}
+        page_type = str(page.get("type") or "").strip().lower()
+        step(index, f"authorize/continue page_type={page_type or '?'}")
+
+        # ── Step 5: register password (new accounts only) ────────────────────
+        is_new_account = (page_type == "create_account_password"
+                          or "create-account/password" in str(ac_data.get("continue_url") or ""))
+
+        if is_new_account:
+            step(index, "注册账号密码")
+            # Visit create-account/password page first to establish state
+            try:
+                pw_nav_h = self._navigate_headers(f"{auth_base}/create-account")
+                request_with_local_retry(self.session, "get", f"{auth_base}/create-account/password", headers=pw_nav_h, verify=False)
+            except Exception:
+                pass
+
+            # Refresh sentinel for password registration
+            sentinel_pw, _ = build_sentinel_token(
+                self.session, self.device_id, "username_password_create",
+                user_agent=self.fingerprint.get("user_agent", ""),
+                sec_ch_ua=self.fingerprint.get("sec_ch_ua", ""),
+            )
+            pw_h = self._json_headers(f"{auth_base}/create-account/password")
+            pw_h["openai-sentinel-token"] = sentinel_pw
+            pw_h = _headers_with_clearance(pw_h, f"{auth_base}/api/accounts/user/register", self.proxy, self.clearance_user_agent)
+            # Password = email with @ removed (same convention as reference project)
+            password = str(email or "").replace("@", "").replace(".", "")
+            if len(password) < 8:
+                password = f"{password}2026!"
+            pw_resp, _ = request_with_local_retry(
+                self.session, "post", f"{auth_base}/api/accounts/user/register",
+                json={"password": password, "username": email},
+                headers=pw_h,
+                verify=False,
+            )
+            if pw_resp is not None and pw_resp.status_code == 200:
+                step(index, "密码注册成功")
+            else:
+                step(index, f"密码注册返回 {getattr(pw_resp, 'status_code', '?')}，继续", "yellow")
+
+        # ── Step 6: send OTP ───────────────────────────────────────────────────
+        step(index, "发送邮箱验证码 (email-otp/send)")
+        referer = f"{auth_base}/create-account/password" if is_new_account else f"{auth_base}/email-verification"
+        send_h = self._json_headers(referer)
+        send_h = _headers_with_clearance(send_h, f"{auth_base}/api/accounts/email-otp/send", self.proxy, self.clearance_user_agent)
+        send_resp, _ = request_with_local_retry(
+            self.session, "get", f"{auth_base}/api/accounts/email-otp/send",
+            headers=send_h,
+            verify=False,
+        )
+        if send_resp is not None and send_resp.status_code == 200:
+            step(index, "验证码邮件已发送")
+        else:
+            # Fallback: passwordless/send-otp
+            step(index, f"email-otp/send 返回 {getattr(send_resp, 'status_code', '?')}，尝试 passwordless 备用路径", "yellow")
+            fallback_h = self._json_headers(referer)
+            fallback_h = _headers_with_clearance(fallback_h, f"{auth_base}/api/accounts/passwordless/send-otp", self.proxy, self.clearance_user_agent)
+            request_with_local_retry(
+                self.session, "post", f"{auth_base}/api/accounts/passwordless/send-otp",
+                json={},
+                headers=fallback_h,
+                verify=False,
+            )
+
+        self.passwordless_signup = True
         step(index, f"chatgpt.com 入口授权完成, passwordless={self.passwordless_signup}, url={final_url[:120]}")
 
     def _exchange_via_chatgpt_session(self, continue_url: str, index: int) -> dict:
