@@ -1249,7 +1249,7 @@ class PlatformRegistrar:
 
         # ── Step 4: authorize/continue with screen_hint=signup ────────────────
         step(index, "提交注册邮箱 (authorize/continue signup)")
-        sentinel_value, _oai_sc = build_sentinel_token(
+        sentinel_value = build_sentinel_token(
             self.session, self.device_id, "authorize_continue", self.fingerprint,
         )
         continue_h = self._json_headers(f"{auth_base}/create-account")
@@ -1281,7 +1281,7 @@ class PlatformRegistrar:
                 pass
 
             # Refresh sentinel for password registration
-            sentinel_pw, _ = build_sentinel_token(
+            sentinel_pw = build_sentinel_token(
                 self.session, self.device_id, "username_password_create", self.fingerprint,
             )
             pw_h = self._json_headers(f"{auth_base}/create-account/password")
