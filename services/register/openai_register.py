@@ -1262,14 +1262,24 @@ class PlatformRegistrar:
             allow_redirects=False,
             verify=False,
         )
+        if ac_resp is None or ac_resp.status_code != 200:
+            body = ""
+            try:
+                body = (ac_resp.text or "")[:300] if ac_resp is not None else ""
+            except Exception:
+                pass
+            raise RuntimeError(error or f"authorize/continue 失败 HTTP {getattr(ac_resp, 'status_code', '?')}: {body}")
         ac_data = _response_json(ac_resp) if ac_resp is not None else {}
         page = (ac_data.get("page") or {}) if isinstance(ac_data, dict) else {}
         page_type = str(page.get("type") or "").strip().lower()
-        step(index, f"authorize/continue page_type={page_type or '?'}")
+        step(index, f"authorize/continue page_type={page_type or '(empty)'}")
 
         # ── Step 5: register password (new accounts only) ────────────────────
-        is_new_account = (page_type == "create_account_password"
-                          or "create-account/password" in str(ac_data.get("continue_url") or ""))
+        # page_type "create_account_password" → new account, needs password registration
+        # page_type "email_otp_verification"  → OTP already triggered by state machine
+        # page_type empty / other             → treat as new account, try password path
+        is_new_account = page_type not in ("email_otp_verification", "login_password",
+                                           "passwordless_login", "mfa_challenge")
 
         if is_new_account:
             step(index, "注册账号密码")
